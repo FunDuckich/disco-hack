@@ -152,9 +152,11 @@ class DBManager:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute('''
                 SELECT
-                    COUNT(*) as total_files,
-                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) as cache_size,
-                    COUNT(CASE WHEN is_pinned = 1 THEN 1 END) as pinned_count
+                    COUNT(CASE WHEN is_dir = 0 THEN 1 END) AS total_files,
+                    COUNT(CASE WHEN is_dir = 0 AND status = 'cached' THEN 1 END) AS cached_count,
+                    COUNT(CASE WHEN is_dir = 0 AND status = 'syncing' THEN 1 END) AS syncing_count,
+                    COUNT(CASE WHEN is_dir = 0 AND is_pinned = 1 THEN 1 END) AS pinned_count,
+                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) AS cache_size
                 FROM files
             ''')
             return dict(await cursor.fetchone())

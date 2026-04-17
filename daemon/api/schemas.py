@@ -29,9 +29,11 @@ class SearchResult(BaseModel):
 
 class StatsResponse(BaseModel):
     total_files: int
+    cached_count: int
+    syncing_count: int
+    pinned_count: int
     cache_size: int
     max_size: int
-    pinned_count: int
 
 class PinResponse(BaseModel):
     status: str
