@@ -2,6 +2,8 @@
 import logging
 import aiosqlite
 
+import aiosqlite
+
 
 async def import_cloud_to_db(db_manager, cloud_files, cloud_type):
     """
