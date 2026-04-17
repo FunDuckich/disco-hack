@@ -1,115 +1,126 @@
-import aiosqlite
+import os
+import stat
+import errno
+import pyfuse3
+import pyfuse3.asyncio
+import time
 import logging
 
+log = logging.getLogger(__name__)
 
-class DBManager:
-    def __init__(self, db_path="cloudfusion.db"):
-        self.db_path = db_path
 
-    async def init_db(self):
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS files (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    parent_id INTEGER,
-                    name TEXT NOT NULL,
-                    size INTEGER DEFAULT 0,
-                    is_dir BOOLEAN DEFAULT 0,
-                    cloud_type TEXT,
-                    remote_path TEXT,
-                    local_path TEXT,
-                    etag TEXT,
-                    status TEXT DEFAULT 'stub', -- stub, cached, syncing
-                    is_pinned BOOLEAN DEFAULT 0,
-                    last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(cloud_type, remote_path)
-                )
-            ''')
+class CloudFusionVFS(pyfuse3.Operations):
+    def __init__(self, db_manager, cloud_api):  # Передаем db_manager вместо db_path
+        super().__init__()
+        self.db_manager = db_manager
+        self.cloud_api = cloud_api
+        self.inode_2_dbid = {pyfuse3.ROOT_INODE: None}
+        self.dbid_2_inode = {None: pyfuse3.ROOT_INODE}
+        self.next_inode = pyfuse3.ROOT_INODE + 1
 
-            await db.execute('''
-                CREATE VIRTUAL TABLE IF NOT EXISTS files_fts 
-                USING fts5(name, content='files', content_rowid='id')
-            ''')
+    def _get_inode(self, db_id: int) -> int:
+        if db_id not in self.dbid_2_inode:
+            self.dbid_2_inode[db_id] = self.next_inode
+            self.inode_2_dbid[self.next_inode] = db_id
+            self.next_inode += 1
+        return self.dbid_2_inode[db_id]
 
-            await db.execute('''
-                CREATE TRIGGER IF NOT EXISTS t_files_ai AFTER INSERT ON files BEGIN
-                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
-                END
-            ''')
+    async def getattr(self, inode, ctx=None):
+        db_id = self.inode_2_dbid.get(inode)
+        entry = pyfuse3.EntryAttributes()
 
-            await db.execute('''
-                CREATE TRIGGER IF NOT EXISTS t_files_ad AFTER DELETE ON files BEGIN
-                    INSERT INTO files_fts(files_fts, rowid, name) VALUES('delete', old.id, old.name);
-                END
-            ''')
+        stamp = int(time.time() * 1e9)
+        entry.st_atime_ns = stamp
+        entry.st_ctime_ns = stamp
+        entry.st_mtime_ns = stamp
+        entry.st_gid = os.getgid()
+        entry.st_uid = os.getuid()
+        entry.st_ino = inode
 
-            await db.execute('''
-                CREATE TRIGGER IF NOT EXISTS t_files_au AFTER UPDATE OF name ON files BEGIN
-                    INSERT INTO files_fts(files_fts, rowid, name) VALUES('delete', old.id, old.name);
-                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
-                END
-            ''')
+        if db_id is None:
+            entry.st_mode = (stat.S_IFDIR | 0o755)
+            entry.st_size = 0
+            return entry
 
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_parent ON files(parent_id)')
-            await db.commit()
-            logging.info("Database initialized successfully with FTS5 and Triggers")
+        row = await self.db_manager.get_file_by_id(db_id)
+        if not row:
+            raise pyfuse3.FUSEError(errno.ENOENT)
 
-    async def bulk_upsert_metadata(self, metadata_list: list[dict]):
-        """Массовая вставка/обновление метаданных из облака"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.executemany('''
-                INSERT INTO files (parent_id, name, size, is_dir, cloud_type, remote_path, etag, status)
-                VALUES (:parent_id, :name, :size, :is_dir, :cloud_type, :remote_path, :etag, 'stub')
-                ON CONFLICT(cloud_type, remote_path) DO UPDATE SET
-                    name = excluded.name,
-                    size = excluded.size,
-                    etag = excluded.etag,
-                    parent_id = excluded.parent_id
-            ''', metadata_list)
-            await db.commit()
+        if row['is_dir']:
+            entry.st_mode = (stat.S_IFDIR | 0o755)
+            entry.st_size = 0
+        else:
+            entry.st_mode = (stat.S_IFREG | 0o644)
+            entry.st_size = row['size']
 
-    async def get_items_by_parent(self, parent_id):
-        """Для навигации в UI и FUSE readdir"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            query = "SELECT * FROM files WHERE parent_id IS ?"
-            cursor = await db.execute(query, (parent_id,))
-            return [dict(r) for r in await cursor.fetchall()]
+        return entry
 
-    async def get_stats(self):
-        """Статистика для React Dashboard"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute('''
-                SELECT 
-                    COUNT(*) as total_files,
-                    SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END) as cache_size,
-                    COUNT(CASE WHEN is_pinned = 1 THEN 1 END) as pinned_count
-                FROM files
-            ''')
-            return dict(await cursor.fetchone())
+    async def lookup(self, parent_inode, name, ctx=None):
+        name_str = name.decode('utf-8')
+        parent_id = self.inode_2_dbid.get(parent_inode)
 
-    async def toggle_pin(self, file_id: int, is_pinned: bool):
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE files SET is_pinned = ? WHERE id = ?", (1 if is_pinned else 0, file_id))
-            await db.commit()
+        db_id = await self.db_manager.lookup_file(parent_id, name_str)
 
-    async def search_files(self, query: str):
-        """Метод поиска с использованием алиасов (f.name, fts.name)"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute('''
-                SELECT 
-                    f.id, 
-                    f.name, 
-                    f.remote_path, 
-                    f.cloud_type, 
-                    f.status, 
-                    f.size 
-                FROM files_fts AS fts
-                JOIN files AS f ON f.id = fts.rowid
-                WHERE fts.name MATCH ? 
-                LIMIT 50
-            ''', (f"{query}*",))
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+        if not db_id:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        inode = self._get_inode(db_id)
+        return await self.getattr(inode)
+
+    async def opendir(self, inode, ctx):
+        return inode
+
+    async def readdir(self, inode, off, token):
+        parent_id = self.inode_2_dbid.get(inode)
+
+        children = await self.db_manager.get_readdir_entries(parent_id)
+
+        for i, row in enumerate(children[off:], start=off):
+            child_inode = self._get_inode(row['id'])
+            attr = await self.getattr(child_inode)
+
+            is_more = pyfuse3.readdir_reply(
+                token,
+                row['name'].encode('utf-8'),
+                attr,
+                i + 1
+            )
+            if not is_more:
+                break
+
+    async def open(self, inode, flags, ctx):
+        db_id = self.inode_2_dbid.get(inode)
+        row = await self.db_manager.get_file_by_id(db_id)
+
+        if not row:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        if row['status'] == 'stub':
+            log.info(f"FUSE: Ленивая загрузка файла {row['name']}...")
+            cache_dir = os.path.expanduser("~/.cache/disco-hack/")
+            os.makedirs(cache_dir, exist_ok=True)
+            local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
+
+            await self.cloud_api.download(row['remote_path'], local_path)
+
+            await self.db_manager.update_downloaded_file(db_id, local_path)
+
+            log.info(f"FUSE: Файл {row['name']} скачан в кэш!")
+
+        return pyfuse3.FileInfo(fh=inode)
+
+    async def read(self, inode, off, size):
+        db_id = self.inode_2_dbid.get(inode)
+        row = await self.db_manager.get_file_by_id(db_id)
+
+        local_path = row['local_path']
+        if not local_path or not os.path.exists(local_path):
+            raise pyfuse3.FUSEError(errno.EIO)
+
+        try:
+            with open(local_path, 'rb') as f:
+                f.seek(off)
+                return f.read(size)
+        except Exception as e:
+            log.error(f"FUSE Read Error: {e}")
+            raise pyfuse3.FUSEError(errno.EIO)
