@@ -83,6 +83,27 @@ class DBManager:
             )
             await db.commit()
 
+    async def get_stats(self):
+        """Статистика для React Dashboard"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('''
+                SELECT
+                    COUNT(*) as total_files,
+                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) as cache_size,
+                    COUNT(CASE WHEN is_pinned = 1 THEN 1 END) as pinned_count
+                FROM files
+            ''')
+            return dict(await cursor.fetchone())
+
+    async def toggle_pin(self, file_id: int, is_pinned: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE files SET is_pinned = ? WHERE id = ?",
+                (1 if is_pinned else 0, file_id),
+            )
+            await db.commit()
+
     async def search_files(self, query: str):
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

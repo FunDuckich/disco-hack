@@ -1,34 +1,72 @@
-from fastapi import FastAPI, Query
-from contextlib import asynccontextmanager
-from database.manager import DBManager
-from core.lru_engine import run_lru_cleanup
 import asyncio
+import logging
 import os
+from contextlib import asynccontextmanager
 
+from fastapi import FastAPI, Query
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    os.makedirs(os.path.expanduser(CACHE_DIR), exist_ok=True)
-    await db.init_db()
-    lru_task = asyncio.create_task(lru_scheduler())
-    yield
-    lru_task.cancel()
+from core.lru_engine import run_lru_cleanup
+from database.manager import DBManager
 
-
-app = FastAPI(title="CloudFusion", lifespan=lifespan)
-db = DBManager("cloudfusion.db")
 
 CACHE_DIR = "~/.cache/cloud-fusion/"
 MAX_CACHE_GB = 5
+MOUNTPOINT = "~/CloudFusion"
+DB_PATH = "cloudfusion.db"
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+log = logging.getLogger("cloudfusion")
+
+db = DBManager(DB_PATH)
+
+try:
+    from core.mount import DummyCloudAPI, fuse_runner
+    from core.vfs import CloudFusionVFS
+    _FUSE_IMPORT_ERROR: Exception | None = None
+except ImportError as e:
+    DummyCloudAPI = None
+    fuse_runner = None
+    CloudFusionVFS = None
+    _FUSE_IMPORT_ERROR = e
 
 
 async def lru_scheduler():
     while True:
         try:
             await run_lru_cleanup(db.db_path, CACHE_DIR, MAX_CACHE_GB)
-        except Exception as e:
-            print(f"LRU Error: {e}")
+        except Exception:
+            log.exception("LRU cleanup failed")
         await asyncio.sleep(600)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    os.makedirs(os.path.expanduser(CACHE_DIR), exist_ok=True)
+    await db.init_db()
+
+    background_tasks: list[asyncio.Task] = [asyncio.create_task(lru_scheduler())]
+
+    if fuse_runner is not None:
+        vfs = CloudFusionVFS(db, DummyCloudAPI())
+        mountpoint = os.path.expanduser(MOUNTPOINT)
+        background_tasks.append(asyncio.create_task(fuse_runner(vfs, mountpoint)))
+    else:
+        # pyfuse3 is Linux-only; on Windows we still serve the API so the UI can be developed.
+        log.warning("FUSE mount skipped — pyfuse3 unavailable (%s)", _FUSE_IMPORT_ERROR)
+
+    try:
+        yield
+    finally:
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+
+
+app = FastAPI(title="CloudFusion", lifespan=lifespan)
 
 
 @app.get("/api/search")
