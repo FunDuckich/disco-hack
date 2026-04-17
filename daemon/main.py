@@ -6,12 +6,12 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse
 
 from api.middleware import LoggingMiddleware
-from api.schemas import FileItem, PinResponse, SearchResult, StatsResponse
+from api.schemas import AuthStatusResponse, FileItem, PathSegment, PinResponse, SearchResult, StatsResponse, SyncResponse
 from core.lru_engine import run_lru_cleanup
 from daemon.cloud_api.auth import YandexAuthenticator
 from database.manager import DBManager
@@ -41,26 +41,6 @@ except ImportError as e:
     CloudFusionVFS = None
     _FUSE_IMPORT_ERROR = e
 
-@app.get("/api/auth/login")
-def login_route():
-    url = YandexAuthenticator.get_login_url()
-    webbrowser.open(url)
-    return {"status": "browser_opened"}
-
-@app.get("/callback", response_class=HTMLResponse)
-async def yandex_callback(code: str = Query(...)):
-    token = YandexAuthenticator.get_token_from_code(code)
-
-    if token:
-        await db.set_config("yandex_token", token)
-        print(f"🔥 Токен успешно сохранен в БД")
-
-        # Можно отправить сигнал (через событие или переменную),
-        # чтобы FUSE узнал о появлении токена
-        return "<h1>Успешно! Теперь вернитесь в приложение.</h1>"
-    else:
-        return "<h1>Ошибка авторизации</h1>"
-
 async def lru_scheduler():
     while True:
         try:
@@ -89,33 +69,101 @@ app.add_middleware(
 )
 
 
-@app.get("/api/search", response_model=list[SearchResult])
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+@app.get("/api/search", response_model=list[SearchResult], tags=["files"])
 async def api_search(q: str = Query(..., min_length=1)):
     return await db.search_files(q)
 
 
-@app.get("/api/stats", response_model=StatsResponse)
+@app.get("/api/stats", response_model=StatsResponse, tags=["stats"])
 async def api_stats():
-    return await db.get_stats()
+    stats = await db.get_stats()
+    return {**stats, "max_size": MAX_CACHE_GB * 1024 ** 3}
 
 
-@app.get("/api/files/list", response_model=list[FileItem])
-async def api_list(parent_id: int = None):
+@app.get("/api/files/list", response_model=list[FileItem], tags=["files"])
+async def api_list(parent_id: int | None = None):
     return await db.get_items_by_parent(parent_id)
 
 
-@app.get("/api/files/{file_id}", response_model=FileItem)
+@app.get("/api/files/{file_id}", response_model=FileItem, tags=["files"])
 async def api_file(file_id: int):
     file = await db.get_file_by_id(file_id)
     if file is None:
         raise HTTPException(status_code=404, detail="File not found")
     return file
 
-  
-@app.post("/api/files/{file_id}/pin", response_model=PinResponse)
+
+@app.get("/api/files/{file_id}/path", response_model=list[PathSegment], tags=["files"])
+async def api_file_path(file_id: int):
+    file = await db.get_file_by_id(file_id)
+    if file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return await db.get_ancestors(file_id)
+
+
+@app.post("/api/files/{file_id}/pin", response_model=PinResponse, tags=["files"])
 async def api_pin(file_id: int, pinned: bool):
     await db.toggle_pin(file_id, pinned)
     return {"status": "ok"}
+
+
+@app.get("/api/auth/login", tags=["auth"])
+def login_route():
+    url = YandexAuthenticator.get_login_url()
+    webbrowser.open(url)
+    return {"status": "browser_opened"}
+
+
+@app.get("/callback", response_class=HTMLResponse, tags=["auth"])
+async def yandex_callback(code: str = Query(...)):
+    token = YandexAuthenticator.get_token_from_code(code)
+
+    if token:
+        await db.set_config("yandex_token", token)
+        log.info("Yandex token saved to DB")
+
+        # Можно отправить сигнал (через событие или переменную),
+        # чтобы FUSE узнал о появлении токена
+        return "<h1>Успешно! Теперь вернитесь в приложение.</h1>"
+    else:
+        log.warning("Yandex auth failed: no token returned for code")
+        return "<h1>Ошибка авторизации</h1>"
+
+
+@app.get("/health", tags=["system"])
+async def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/status", response_model=AuthStatusResponse, tags=["auth"])
+async def auth_status():
+    token = await db.get_config("yandex_token")
+    return {"connected": token is not None}
+
+
+@app.post("/api/auth/logout", tags=["auth"])
+async def logout_route():
+    await db.delete_config("yandex_token")
+    log.info("Yandex token cleared from DB")
+    return {"status": "ok"}
+
+
+@app.post("/api/files/{file_id}/sync", response_model=SyncResponse, tags=["files"])
+async def api_sync(file_id: int):
+    file = await db.get_file_by_id(file_id)
+    if file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if file["is_dir"]:
+        raise HTTPException(status_code=400, detail="Cannot sync a directory")
+    await db.set_file_status(file_id, "syncing")
+    log.info("File %d marked for sync", file_id)
+    return {"status": "syncing"}
 
 
 if __name__ == "__main__":

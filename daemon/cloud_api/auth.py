@@ -1,13 +1,15 @@
+import os
+
 import yadisk
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class YandexAuthenticator:
-    # Эти ключи общие для всего приложения
-    CLIENT_ID = "92b225afdfb54df1ba7f18c13597d16b"
-    CLIENT_SECRET = "95c9d7aad4d6446aacc827c38e9ad491"
-
-    # URL, который слушает ваш локальный FastAPI сервер
-    REDIRECT_URI = "http://localhost:8000/callback"
+    CLIENT_ID = os.environ["YANDEX_CLIENT_ID"]
+    CLIENT_SECRET = os.environ["YANDEX_CLIENT_SECRET"]
+    REDIRECT_URI = os.getenv("YANDEX_REDIRECT_URI", "http://localhost:8000/callback")
 
     @classmethod
     def get_auth_client(cls):

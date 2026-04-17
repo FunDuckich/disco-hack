@@ -81,6 +81,11 @@ class DBManager:
         row = await cursor.fetchone()
         return row['value'] if row else None
 
+    async def delete_config(self, key: str):
+        db = await self.get_db()
+        await db.execute("DELETE FROM config WHERE key = ?", (key,))
+        await db.commit()
+
     async def bulk_upsert_metadata(self, metadata_list: list[dict]):
         db = await self.get_db()
         await db.executemany('''
@@ -136,6 +141,11 @@ class DBManager:
         )
         await db.commit()
 
+    async def set_file_status(self, file_id: int, status: str):
+        db = await self.get_db()
+        await db.execute("UPDATE files SET status = ? WHERE id = ?", (status, file_id))
+        await db.commit()
+
     async def get_stats(self):
         """Статистика для React Dashboard"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -161,9 +171,25 @@ class DBManager:
         db = await self.get_db()
         db.row_factory = aiosqlite.Row
         cursor = await db.execute('''
-            SELECT f.id, f.name, f.remote_path, f.cloud_type, f.status, f.size 
+            SELECT f.id, f.name, f.remote_path, f.cloud_type, f.status, f.size
             FROM files_fts AS fts
             JOIN files AS f ON f.id = fts.rowid
             WHERE fts.name MATCH ? LIMIT 50
         ''', (f"{query}*",))
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_ancestors(self, file_id: int):
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute('''
+            WITH RECURSIVE ancestors(id, parent_id, name, depth) AS (
+                SELECT id, parent_id, name, 0 FROM files WHERE id = ?
+                UNION ALL
+                SELECT f.id, f.parent_id, f.name, a.depth + 1
+                FROM files f
+                JOIN ancestors a ON f.id = a.parent_id
+                WHERE a.depth < 64
+            )
+            SELECT id, name FROM ancestors ORDER BY depth DESC
+        ''', (file_id,))
         return [dict(r) for r in await cursor.fetchall()]
