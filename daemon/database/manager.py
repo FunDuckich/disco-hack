@@ -1,0 +1,115 @@
+import aiosqlite
+import logging
+
+
+class DBManager:
+    def __init__(self, db_path="cloudfusion.db"):
+        self.db_path = db_path
+
+    async def init_db(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_id INTEGER,
+                    name TEXT NOT NULL,
+                    size INTEGER DEFAULT 0,
+                    is_dir BOOLEAN DEFAULT 0,
+                    cloud_type TEXT,
+                    remote_path TEXT,
+                    local_path TEXT,
+                    etag TEXT,
+                    status TEXT DEFAULT 'stub', -- stub, cached, syncing
+                    is_pinned BOOLEAN DEFAULT 0,
+                    last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(cloud_type, remote_path)
+                )
+            ''')
+
+            await db.execute('''
+                CREATE VIRTUAL TABLE IF NOT EXISTS files_fts 
+                USING fts5(name, content='files', content_rowid='id')
+            ''')
+
+            await db.execute('''
+                CREATE TRIGGER IF NOT EXISTS t_files_ai AFTER INSERT ON files BEGIN
+                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
+                END
+            ''')
+
+            await db.execute('''
+                CREATE TRIGGER IF NOT EXISTS t_files_ad AFTER DELETE ON files BEGIN
+                    INSERT INTO files_fts(files_fts, rowid, name) VALUES('delete', old.id, old.name);
+                END
+            ''')
+
+            await db.execute('''
+                CREATE TRIGGER IF NOT EXISTS t_files_au AFTER UPDATE OF name ON files BEGIN
+                    INSERT INTO files_fts(files_fts, rowid, name) VALUES('delete', old.id, old.name);
+                    INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
+                END
+            ''')
+
+            await db.execute('CREATE INDEX IF NOT EXISTS idx_parent ON files(parent_id)')
+            await db.commit()
+            logging.info("Database initialized successfully with FTS5 and Triggers")
+
+    async def bulk_upsert_metadata(self, metadata_list: list[dict]):
+        """Массовая вставка/обновление метаданных из облака"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany('''
+                INSERT INTO files (parent_id, name, size, is_dir, cloud_type, remote_path, etag, status)
+                VALUES (:parent_id, :name, :size, :is_dir, :cloud_type, :remote_path, :etag, 'stub')
+                ON CONFLICT(cloud_type, remote_path) DO UPDATE SET
+                    name = excluded.name,
+                    size = excluded.size,
+                    etag = excluded.etag,
+                    parent_id = excluded.parent_id
+            ''', metadata_list)
+            await db.commit()
+
+    async def get_items_by_parent(self, parent_id):
+        """Для навигации в UI и FUSE readdir"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            query = "SELECT * FROM files WHERE parent_id IS ?"
+            cursor = await db.execute(query, (parent_id,))
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_stats(self):
+        """Статистика для React Dashboard"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('''
+                SELECT 
+                    COUNT(*) as total_files,
+                    SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END) as cache_size,
+                    COUNT(CASE WHEN is_pinned = 1 THEN 1 END) as pinned_count
+                FROM files
+            ''')
+            return dict(await cursor.fetchone())
+
+    async def toggle_pin(self, file_id: int, is_pinned: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE files SET is_pinned = ? WHERE id = ?", (1 if is_pinned else 0, file_id))
+            await db.commit()
+
+    async def search_files(self, query: str):
+        """Метод поиска с использованием алиасов (f.name, fts.name)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('''
+                SELECT 
+                    f.id, 
+                    f.name, 
+                    f.remote_path, 
+                    f.cloud_type, 
+                    f.status, 
+                    f.size 
+                FROM files_fts AS fts
+                JOIN files AS f ON f.id = fts.rowid
+                WHERE fts.name MATCH ? 
+                LIMIT 50
+            ''', (f"{query}*",))
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
