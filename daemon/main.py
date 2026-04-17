@@ -15,10 +15,10 @@ async def lifespan(app: FastAPI):
     lru_task.cancel()
 
 
-app = FastAPI(title="DiscoHack Backend", lifespan=lifespan)
+app = FastAPI(title="CloudFusion", lifespan=lifespan)
 db = DBManager("cloudfusion.db")
 
-CACHE_DIR = "~/.cache/disco-hack/"
+CACHE_DIR = "~/.cache/cloud-fusion/"
 MAX_CACHE_GB = 5
 
 
