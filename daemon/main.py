@@ -30,16 +30,23 @@ logging.basicConfig(
 log = logging.getLogger("cloudfusion")
 
 db = DBManager(DB_PATH)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    os.makedirs(os.path.expanduser(CACHE_DIR), exist_ok=True)
+    await db.init_db()
+    lru_task = asyncio.create_task(lru_scheduler())
+    yield
+    lru_task.cancel()
 
-try:
-    from core.mount import DummyCloudAPI, fuse_runner
-    from core.vfs import CloudFusionVFS
-    _FUSE_IMPORT_ERROR: Exception | None = None
-except ImportError as e:
-    DummyCloudAPI = None
-    fuse_runner = None
-    CloudFusionVFS = None
-    _FUSE_IMPORT_ERROR = e
+app = FastAPI(title="CloudFusion", lifespan=lifespan)
+
+app.add_middleware(LoggingMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:1420", "http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/api/auth/login")
 def login_route():
@@ -68,26 +75,6 @@ async def lru_scheduler():
         except Exception:
             log.exception("LRU cleanup failed")
         await asyncio.sleep(600)
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    os.makedirs(os.path.expanduser(CACHE_DIR), exist_ok=True)
-    await db.init_db()
-    lru_task = asyncio.create_task(lru_scheduler())
-    yield
-    lru_task.cancel()
-
-
-app = FastAPI(title="CloudFusion", lifespan=lifespan)
-
-app.add_middleware(LoggingMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:1420", "http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 @app.get("/api/search", response_model=list[SearchResult])
 async def api_search(q: str = Query(..., min_length=1)):

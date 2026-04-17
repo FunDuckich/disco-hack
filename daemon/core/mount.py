@@ -27,11 +27,12 @@ async def start_cloud_fusion():
     db_path = "cloudfusion.db"
     os.makedirs(mountpoint, exist_ok=True)
 
-    # 1. Инициализация БД
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.abspath(os.path.join(current_dir, "..", "database", "cloudfusion.db"))
+
     db_manager = DBManager(db_path)
     await db_manager.init_db()
 
-    # 2. Ожидание токена (блокируем выполнение, пока GUI не запишет токен)
     token = None
     while not token:
         token = await db_manager.get_config("yandex_token")
@@ -41,7 +42,6 @@ async def start_cloud_fusion():
         else:
             logging.info("Токен найден!")
 
-    # 3. Инициализация API и синхронизация
     cloud_api = YandexDiskAsyncClient(token=token)
     try:
         logging.info("Синхронизация структуры файлов...")
@@ -50,16 +50,12 @@ async def start_cloud_fusion():
             await import_cloud_to_db(db_manager, cloud_files, cloud_type="yandex")
     except Exception as e:
         logging.error(f"Ошибка синхронизации: {e}")
-        # Решите, критично ли это. Если да — return
 
-    # 4. Подготовка VFS
     vfs = CloudFusionVFS(db_manager, cloud_api)
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=cloudfusion')
-    fuse_options.add('allow_root') # Осторожно, требует прав root или настройки fuse.conf
 
-    # 5. Монтирование и запуск
     pyfuse3.asyncio.enable()
     pyfuse3.init(vfs, mountpoint, fuse_options)
 
