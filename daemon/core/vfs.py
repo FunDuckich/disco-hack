@@ -91,13 +91,12 @@ class CloudFusionVFS(pyfuse3.Operations):
     async def open(self, inode, flags, ctx):
         db_id = self.inode_2_dbid.get(inode)
         row = await self.db_manager.get_file_by_id(db_id)
-
         if not row:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         if row['status'] == 'stub':
             log.info(f"FUSE: Ленивая загрузка файла {row['name']}...")
-            cache_dir = os.path.expanduser("~/.cache/disco-hack/")
+            cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
             os.makedirs(cache_dir, exist_ok=True)
             local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
 

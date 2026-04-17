@@ -3,7 +3,14 @@ import asyncio
 import pyfuse3
 import pyfuse3.asyncio
 import logging
+import sys
 from vfs import CloudFusionVFS
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if root_path not in sys.path:
+    sys.path.insert(0, root_path)
+
+from daemon.database.manager import DBManager
+from daemon.core.vfs import CloudFusionVFS
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,8 +31,12 @@ async def mount():
 
     os.makedirs(mountpoint, exist_ok=True)
 
-    cloud_api = DummyCloudAPI() # ВСТАВИТЬ ВИТАЛЬКУ
-    vfs = CloudFusionVFS(db_path, cloud_api)
+    db_manager = DBManager(db_path)
+
+    cloud_api = DummyCloudAPI() # Виталька
+
+    await db_manager.init_db()
+    vfs = CloudFusionVFS(db_manager, cloud_api)
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('allow_root')
@@ -35,17 +46,16 @@ async def mount():
     try:
         pyfuse3.init(vfs, mountpoint, fuse_options)
         logging.info(f"Успешно примонтировано к {mountpoint}.")
-        logging.info("Открой Dolphin и зайди в эту папку. Нажми Ctrl+C для выхода.")
-
         await pyfuse3.main()
-    except pyfuse3.FUSEError as e:
-        logging.error(f"Ошибка монтирования: {e}")
-    except KeyboardInterrupt:
-        logging.info("Остановка демона...")
+    except Exception as e:
+        logging.error(f"Произошла ошибка: {e}")
     finally:
         pyfuse3.close()
         logging.info("Отмонтировано.")
 
 
 if __name__ == '__main__':
-    asyncio.run(mount())
+    try:
+        asyncio.run(mount())
+    except KeyboardInterrupt:
+        pass
