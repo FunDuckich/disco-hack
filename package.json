@@ -1,0 +1,34 @@
+{
+  "name": "sev",
+  "version": "1.0.0",
+  "description": "> **Нативный агрегатор облачных хранилищ с умным кэшированием для ALT Linux.**",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FunDuckich/disco-hack.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/FunDuckich/disco-hack/issues"
+  },
+  "homepage": "https://github.com/FunDuckich/disco-hack#readme",
+  "dependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tailwindcss": "^4.2.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.8"
+  }
+}
