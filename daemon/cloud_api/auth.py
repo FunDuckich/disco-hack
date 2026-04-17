@@ -1,15 +1,12 @@
-import os
-
 import yadisk
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import settings
 
 
 class YandexAuthenticator:
-    CLIENT_ID = os.environ["YANDEX_CLIENT_ID"]
-    CLIENT_SECRET = os.environ["YANDEX_CLIENT_SECRET"]
-    REDIRECT_URI = os.getenv("YANDEX_REDIRECT_URI", "http://localhost:8000/callback")
+    CLIENT_ID = settings.yandex_client_id
+    CLIENT_SECRET = settings.yandex_client_secret
+    REDIRECT_URI = settings.yandex_redirect_uri
 
     @classmethod
     def get_auth_client(cls):

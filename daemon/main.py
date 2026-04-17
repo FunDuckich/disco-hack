@@ -12,15 +12,10 @@ from starlette.responses import HTMLResponse, JSONResponse
 
 from api.middleware import LoggingMiddleware
 from api.schemas import AuthStatusResponse, FileItem, PathSegment, PinResponse, SearchResult, StatsResponse, SyncResponse
+from config import settings
 from core.lru_engine import run_lru_cleanup
 from daemon.cloud_api.auth import YandexAuthenticator
 from database.manager import DBManager
-
-
-CACHE_DIR = "~/.cache/cloud-fusion/"
-MAX_CACHE_GB = 5
-MOUNTPOINT = "~/CloudFusion"
-DB_PATH = "cloudfusion.db"
 
 
 logging.basicConfig(
@@ -29,33 +24,65 @@ logging.basicConfig(
 )
 log = logging.getLogger("cloudfusion")
 
-db = DBManager(DB_PATH)
+db = DBManager(settings.db_path)
 
 try:
-    from core.mount import DummyCloudAPI, fuse_runner
-    from core.vfs import CloudFusionVFS
+    from core.mount import start_cloud_fusion
+    _FUSE_AVAILABLE = True
     _FUSE_IMPORT_ERROR: Exception | None = None
 except ImportError as e:
-    DummyCloudAPI = None
-    fuse_runner = None
-    CloudFusionVFS = None
+    start_cloud_fusion = None
+    _FUSE_AVAILABLE = False
     _FUSE_IMPORT_ERROR = e
 
 async def lru_scheduler():
     while True:
         try:
-            await run_lru_cleanup(db.db_path, CACHE_DIR, MAX_CACHE_GB)
+            await run_lru_cleanup(db.db_path, settings.cache_dir, settings.max_cache_gb)
         except Exception:
             log.exception("LRU cleanup failed")
         await asyncio.sleep(600)
 
+async def _cancel(task: asyncio.Task | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs(os.path.expanduser(CACHE_DIR), exist_ok=True)
+    os.makedirs(os.path.expanduser(settings.cache_dir), exist_ok=True)
     await db.init_db()
     lru_task = asyncio.create_task(lru_scheduler())
-    yield
-    lru_task.cancel()
+    log.info("CloudFusion daemon started (cache=%s, limit=%dGB)", settings.cache_dir, settings.max_cache_gb)
+
+    mount_task: asyncio.Task | None = None
+    if settings.enable_fuse:
+        if not _FUSE_AVAILABLE:
+            log.warning(
+                "ENABLE_FUSE=true but FUSE imports failed (%s). Server will run without mount.",
+                _FUSE_IMPORT_ERROR,
+            )
+        else:
+            try:
+                mount_task = asyncio.create_task(start_cloud_fusion())
+                log.info("FUSE mount task started (mountpoint=%s)", settings.mountpoint)
+            except Exception:
+                log.exception("Failed to start FUSE mount task — continuing without mount")
+    else:
+        log.info("FUSE disabled (set ENABLE_FUSE=true to enable)")
+
+    try:
+        yield
+    finally:
+        await _cancel(mount_task)
+        await _cancel(lru_task)
+        await db.close()
+        log.info("CloudFusion daemon stopped")
 
 
 app = FastAPI(title="CloudFusion", lifespan=lifespan)
@@ -83,7 +110,7 @@ async def api_search(q: str = Query(..., min_length=1)):
 @app.get("/api/stats", response_model=StatsResponse, tags=["stats"])
 async def api_stats():
     stats = await db.get_stats()
-    return {**stats, "max_size": MAX_CACHE_GB * 1024 ** 3}
+    return {**stats, "max_size": settings.max_cache_gb * 1024 ** 3}
 
 
 @app.get("/api/files/list", response_model=list[FileItem], tags=["files"])
