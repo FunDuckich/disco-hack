@@ -71,33 +71,32 @@ class CloudFusionVFS(pyfuse3.Operations):
         return inode
 
     async def readdir(self, inode, off, token):
-        parent_id = self.inode_2_dbid.get(inode)
+        parent_db_id = self.inode_2_dbid.get(inode)
+        log.info(f"FUSE: Чтение директории inode={inode} (DB_ID={parent_db_id})")
 
-        children = await self.db_manager.get_readdir_entries(parent_id)
+        entries = await self.db_manager.get_readdir_entries(parent_db_id)
+        log.info(f"FUSE: Найдено {len(entries)} элементов в БД")
 
-        for i, row in enumerate(children[off:], start=off):
+        for i, row in enumerate(entries[off:], start=off):
             child_inode = self._get_inode(row['id'])
-            attr = await self.getattr(child_inode)
+            attr = pyfuse3.EntryAttributes()
+            # Заполняем минимальные атрибуты для readdir
+            attr.st_ino = child_inode
+            attr.st_mode = (stat.S_IFDIR | 0o755) if row['is_dir'] else (stat.S_IFREG | 0o644)
 
-            is_more = pyfuse3.readdir_reply(
-                token,
-                row['name'].encode('utf-8'),
-                attr,
-                i + 1
-            )
-            if not is_more:
+            # Важный момент: передаем имя как байты
+            if not pyfuse3.readdir_reply(token, row['name'].encode('utf-8'), attr, i + 1):
                 break
 
     async def open(self, inode, flags, ctx):
         db_id = self.inode_2_dbid.get(inode)
         row = await self.db_manager.get_file_by_id(db_id)
-
         if not row:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         if row['status'] == 'stub':
             log.info(f"FUSE: Ленивая загрузка файла {row['name']}...")
-            cache_dir = os.path.expanduser("~/.cache/disco-hack/")
+            cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
             os.makedirs(cache_dir, exist_ok=True)
             local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
 
