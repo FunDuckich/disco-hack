@@ -205,3 +205,32 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- Frontend (React/Node) ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+
+# --- Desktop (Tauri/Rust) ---
+src-tauri/target/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+src-tauri/gen/
+
+# --- Project Specific (DiscoHack) ---
+daemon/venv/
+daemon/__pycache__/
+*.db
+*.sqlite
+/daemon/cache/
+!/daemon/cache/.gitkeep
+
+# --- OS & Editors ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
