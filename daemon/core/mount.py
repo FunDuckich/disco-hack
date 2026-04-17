@@ -1,7 +1,10 @@
-import os
 import asyncio
+import logging
+import os
+
 import pyfuse3
 import pyfuse3.asyncio
+
 import logging
 import sys
 from vfs import CloudFusionVFS
@@ -14,7 +17,11 @@ from daemon.database.manager import DBManager
 from daemon.database.importer import import_cloud_to_db
 from daemon.cloud_api.yandex import YandexDiskAsyncClient
 
+log = logging.getLogger(__name__)
+
+
 logging.basicConfig(level=logging.INFO)
+
 
 async def mount():
     mountpoint = os.path.expanduser("~/CloudFusion")
@@ -57,8 +64,32 @@ async def mount():
     # fuse_options.add('allow_other')
 
     pyfuse3.asyncio.enable()
+    pyfuse3.init(vfs, mountpoint, fuse_options)
+    log.info("Успешно примонтировано к %s", mountpoint)
 
     try:
+        await pyfuse3.main()
+    finally:
+        pyfuse3.close()
+        log.info("Отмонтировано.")
+
+
+async def _standalone():
+    """Run the VFS by itself (no FastAPI). Invoke with `python -m core.mount` from daemon/."""
+    from database.manager import DBManager
+    from core.vfs import CloudFusionVFS
+
+    db = DBManager("cloudfusion.db")
+    await db.init_db()
+    vfs = CloudFusionVFS(db, DummyCloudAPI())
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    try:
+        asyncio.run(_standalone())
+    except KeyboardInterrupt:
+        log.info("Остановка демона...")
         pyfuse3.init(vfs, mountpoint, fuse_options)
         logging.info(f"--- CloudFusion успешно запущен и примонтирован к {mountpoint} ---")
         await pyfuse3.main()
@@ -69,8 +100,3 @@ async def mount():
         pyfuse3.close()
         logging.info("Диск успешно отмонтирован.")
 
-if __name__ == '__main__':
-    try:
-        asyncio.run(mount())
-    except KeyboardInterrupt:
-        pass
