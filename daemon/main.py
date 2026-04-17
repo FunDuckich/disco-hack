@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query
 
+from api.schemas import FileItem, PinResponse, SearchResult, StatsResponse
 from core.lru_engine import run_lru_cleanup
 from database.manager import DBManager
 
@@ -69,22 +70,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="CloudFusion", lifespan=lifespan)
 
 
-@app.get("/api/search")
+@app.get("/api/search", response_model=list[SearchResult])
 async def api_search(q: str = Query(..., min_length=1)):
     return await db.search_files(q)
 
 
-@app.get("/api/stats")
+@app.get("/api/stats", response_model=StatsResponse)
 async def api_stats():
     return await db.get_stats()
 
 
-@app.get("/api/files/list")
+@app.get("/api/files/list", response_model=list[FileItem])
 async def api_list(parent_id: int = None):
     return await db.get_items_by_parent(parent_id)
 
 
-@app.post("/api/files/{file_id}/pin")
+@app.post("/api/files/{file_id}/pin", response_model=PinResponse)
 async def api_pin(file_id: int, pinned: bool):
     await db.toggle_pin(file_id, pinned)
     return {"status": "ok"}
