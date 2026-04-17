@@ -1,33 +1,40 @@
-import errno
 import os
+import stat
+import errno
 import pyfuse3
 import pyfuse3.asyncio
-import asyncio
-import stat
+import aiosqlite
 import time
+import logging
+
+log = logging.getLogger(__name__)
 
 
 class CloudFusionVFS(pyfuse3.Operations):
-    def __init__(self, db_manager, cloud_api):
+    def __init__(self, db_path: str, cloud_api):
         super().__init__()
-        self.db = db_manager
-        self.api = cloud_api
-        self.inode_to_path = {pyfuse3.ROOT_INODE: "/"}
+        self.db_path = db_path
+        self.cloud_api = cloud_api
+        self.inode_2_dbid = {pyfuse3.ROOT_INODE: None}
+        self.dbid_2_inode = {None: pyfuse3.ROOT_INODE}
         self.next_inode = pyfuse3.ROOT_INODE + 1
 
-    async def getattr(self, inode, ctx=None):
-        path = self.inode_to_path.get(inode)
-        if not path:
-            raise pyfuse3.FUSEError(errno.ENOENT)
-        file_info = await self.db.get_info(path)
+    def _get_inode(self, db_id: int) -> int:
+        if db_id not in self.dbid_2_inode:
+            self.dbid_2_inode[db_id] = self.next_inode
+            self.inode_2_dbid[self.next_inode] = db_id
+            self.next_inode += 1
+        return self.dbid_2_inode[db_id]
 
+    async def _fetch_row(self, db_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM files WHERE id = ?", (db_id,))
+            return await cursor.fetchone()
+
+    async def getattr(self, inode, ctx=None):
+        db_id = self.inode_2_dbid.get(inode)
         entry = pyfuse3.EntryAttributes()
-        if file_info['is_dir']:
-            entry.st_mode = (stat.S_IFDIR | 0o755)
-            entry.st_size = 0
-        else:
-            entry.st_mode = (stat.S_IFREG | 0o644)
-            entry.st_size = file_info['size']
 
         stamp = int(time.time() * 1e9)
         entry.st_atime_ns = stamp
@@ -37,63 +44,108 @@ class CloudFusionVFS(pyfuse3.Operations):
         entry.st_uid = os.getuid()
         entry.st_ino = inode
 
+        if db_id is None:
+            entry.st_mode = (stat.S_IFDIR | 0o755)
+            entry.st_size = 0
+            return entry
+
+        row = await self._fetch_row(db_id)
+        if not row:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        if row['is_dir']:
+            entry.st_mode = (stat.S_IFDIR | 0o755)
+            entry.st_size = 0
+        else:
+            entry.st_mode = (stat.S_IFREG | 0o644)
+            entry.st_size = row['size']
+
         return entry
 
     async def lookup(self, parent_inode, name, ctx=None):
         name_str = name.decode('utf-8')
-        parent_path = self.inode_to_path.get(parent_inode)
+        parent_id = self.inode_2_dbid.get(parent_inode)
 
-        full_path = os.path.join(parent_path, name_str)
-        file_info = await self.db.get_info(full_path)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            query = "SELECT id FROM files WHERE name = ? AND parent_id IS ?"
+            cursor = await db.execute(query, (name_str, parent_id))
+            row = await cursor.fetchone()
 
-        if not file_info:
+        if not row:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
-        inode = self._get_or_create_inode(full_path)
+        inode = self._get_inode(row['id'])
         return await self.getattr(inode)
 
     async def opendir(self, inode, ctx):
         return inode
 
     async def readdir(self, inode, off, token):
-        path = self.inode_to_path.get(inode)
+        parent_id = self.inode_2_dbid.get(inode)
 
-        children = await self.db.get_children(path)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT id, name FROM files WHERE parent_id IS ?", (parent_id,))
+            children = await cursor.fetchall()
 
-        for i, child_name in enumerate(children[off:], start=off):
-            full_path = os.path.join(path, child_name)
-            child_inode = self._get_or_create_inode(full_path)
+        for i, row in enumerate(children[off:], start=off):
+            child_inode = self._get_inode(row['id'])
+            attr = await self.getattr(child_inode)
 
             is_more = pyfuse3.readdir_reply(
                 token,
-                child_name.encode('utf-8'),
-                await self.getattr(child_inode),
+                row['name'].encode('utf-8'),
+                attr,
                 i + 1
             )
             if not is_more:
                 break
 
     async def open(self, inode, flags, ctx):
-        path = self.inode_to_path.get(inode)
-        file_info = await self.db.get_info(path)
 
-        if file_info['status'] == 'cloud_only':
-            await self.api.download_file(file_info['remote_path'], file_info['local_path'])
-            await self.db.update_status(path, 'cached')
+        db_id = self.inode_2_dbid.get(inode)
+        row = await self._fetch_row(db_id)
+
+        if not row:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        if row['status'] == 'stub':
+            log.info(f"FUSE: Ленивая загрузка файла {row['name']}...")
+
+            cache_dir = os.path.expanduser("~/.cache/cloudfusion")
+            os.makedirs(cache_dir, exist_ok=True)
+            local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
+
+            await self.cloud_api.download(row['remote_path'], local_path)
+
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "UPDATE files SET status = 'cached', local_path = ? WHERE id = ?",
+                    (local_path, db_id)
+                )
+                await db.commit()
+
+            log.info(f"FUSE: Файл {row['name']} скачан в кэш!")
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE files SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?", (db_id,))
+            await db.commit()
 
         return pyfuse3.FileInfo(fh=inode)
 
     async def read(self, inode, off, size):
-        path = self.inode_to_path.get(inode)
-        file_info = await self.db.get_info(path)
+        db_id = self.inode_2_dbid.get(inode)
+        row = await self._fetch_row(db_id)
 
-        with open(file_info['local_path'], 'rb') as f:
-            f.seek(off)
-            return f.read(size)
+        local_path = row['local_path']
+        if not local_path or not os.path.exists(local_path):
+            raise pyfuse3.FUSEError(errno.EIO)  # Ошибка ввода-вывода
 
-    def _get_or_create_inode(self, path):
-        for ino, p in self.inode_to_path.items():
-            if p == path: return ino
-        self.next_inode += 1
-        self.inode_to_path[self.next_inode] = path
-        return self.next_inode
+        try:
+            with open(local_path, 'rb') as f:
+                f.seek(off)
+                return f.read(size)
+        except Exception as e:
+            log.error(f"FUSE Read Error: {e}")
+            raise pyfuse3.FUSEError(errno.EIO)
