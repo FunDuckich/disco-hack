@@ -20,8 +20,10 @@ logging.basicConfig(level=logging.INFO)
 
 async def mount():
     mountpoint = os.path.expanduser("~/CloudFusion")
-    db_path = "cloudfusion.db"
     os.makedirs(mountpoint, exist_ok=True)
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.abspath(os.path.join(current_dir, "..", "database", "cloudfusion.db"))
 
     db_manager = DBManager(db_path)
     await db_manager.init_db()
