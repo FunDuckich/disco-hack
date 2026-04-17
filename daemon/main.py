@@ -14,7 +14,7 @@ from core.lru_engine import run_lru_cleanup
 CACHE_DIR = "~/.cache/cloud-fusion/"
 MAX_CACHE_GB = 5
 
-db = DBManager("cloudfusion.db")
+db = DBManager("core/cloudfusion.db")
 
 async def lru_scheduler():
     while True:

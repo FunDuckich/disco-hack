@@ -3,7 +3,7 @@ import aiosqlite
 
 
 class DBManager:
-    def __init__(self, db_path="cloudfusion.db"):
+    def __init__(self, db_path="core/cloudfusion.db"):
         self.db_path = db_path
         self._db = None
 
@@ -82,7 +82,6 @@ class DBManager:
 
     async def get_readdir_entries(self, parent_id: int):
         db = await self.get_db()
-        db.row_factory = aiosqlite.Row
         query = "SELECT id, name, is_dir, size FROM files WHERE parent_id IS ?"
         async with db.execute(query, (parent_id,)) as cursor:
             rows = await cursor.fetchall()
