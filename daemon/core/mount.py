@@ -3,11 +3,15 @@ import asyncio
 import pyfuse3
 import pyfuse3.asyncio
 import logging
-
+import sys
 from vfs import CloudFusionVFS
-from database.manager import DBManager
-from database.importer import import_cloud_to_db
-from cloud_api.yandex import YandexDiskAsyncClient
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if root_path not in sys.path:
+    sys.path.insert(0, root_path)
+
+from daemon.database.manager import DBManager
+from daemon.database.importer import import_cloud_to_db
+from daemon.cloud_api.yandex import YandexDiskAsyncClient
 
 logging.basicConfig(level=logging.INFO)
 
