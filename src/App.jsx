@@ -1,104 +1,132 @@
-import React, { useState } from "react";
-import { LayoutDashboard, HardDrive, RefreshCw, Settings, Cloud, Share2, Trash2 } from "lucide-react";
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { CheckCircle2, RefreshCcw, FolderOpen, ChevronRight, HardDrive, X, Minus, Info } from 'lucide-react';
 
-function App() {
-  const [cacheLimit, setCacheLimit] = useState(5); // Размер кэша в ГБ
+const appWindow = getCurrentWindow();
+
+const App = () => {
+  const handleDrag = async () => await appWindow.startDragging();
+  const handleMinimize = async () => await appWindow.minimize();
+  const handleClose = async () => await appWindow.hide();
+
+  const connections = [
+    { id: 'ya', name: 'YANDEX.DISK', percent: 11, used: '30GB', total: '260GB', status: 'synced', color: 'bg-retro-yellow' },
+    { id: 'nc', name: 'NEXTCLOUD', percent: 92, used: '552GB', total: '600GB', status: 'syncing', color: 'bg-retro-blue' },
+  ];
+
+  const retroBox = "border-2 border-retro-dark shadow-retro transition-all duration-100";
 
   return (
-    <div className="h-screen w-full flex flex-col bg-disco-dark relative overflow-hidden select-none text-slate-100">
-      <div className="absolute inset-0 bg-noise pointer-events-none" />
-
-      {/* ШАПКА */}
-      <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 bg-white/5 backdrop-blur-xl z-10">
-        <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-disco-cyan animate-pulse shadow-glow-cyan" />
-          <h1 className="font-black text-lg tracking-tighter bg-gradient-to-r from-disco-cyan to-disco-magenta bg-clip-text text-transparent italic">
-            CLOUDFUSION
-          </h1>
+    <div 
+      onMouseDown={handleDrag}
+      className="w-full min-h-screen bg-retro-bg p-5 font-mono select-none overflow-hidden border-2 border-retro-dark"
+    >
+      {/* HEADER */}
+      <div className="flex justify-between items-center mb-6">
+        <div className="flex flex-col">
+           <h1 className="text-xl font-black tracking-tighter border-b-4 border-retro-purple leading-none">CLOUDFUSION</h1>
+           <span className="text-[10px] font-bold opacity-50 uppercase mt-1">Native Alt Linux Integrator</span>
         </div>
-        <div className="flex gap-4 items-center">
-           <span className="text-[10px] text-slate-500 font-mono tracking-widest uppercase">Alt Linux Edition</span>
-           <Settings size={18} className="text-slate-400 hover:text-disco-magenta transition-colors cursor-pointer" />
+        <div className="flex gap-2" onMouseDown={e => e.stopPropagation()}>
+          <button onClick={handleMinimize} title="Свернуть" className={`${retroBox} bg-white p-1 hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-retro-hover`}>
+            <Minus size={16} />
+          </button>
+          <button onClick={handleClose} title="Закрыть (в трей)" className={`${retroBox} bg-retro-red p-1 text-white hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-retro-hover`}>
+            <X size={16} />
+          </button>
         </div>
-      </header>
+      </div>
 
-      {/* КОНТЕНТ */}
-      <main className="flex-1 p-5 space-y-6 z-10 overflow-y-auto">
-        
-        {/* КАРТОЧКА ОБЛАКА */}
-        <section className="p-4 rounded-2xl bg-white/5 border border-white/10 shadow-xl border-l-disco-cyan border-l-2">
-          <div className="flex justify-between items-start mb-3">
-            <div className="flex items-center gap-3">
-              <Cloud className="text-disco-cyan" size={24} />
-              <div>
-                <h2 className="font-bold text-sm">Яндекс Диск</h2>
-                <p className="text-[10px] text-slate-500 uppercase tracking-widest italic font-semibold">Статус: Подключено</p>
-              </div>
-            </div>
-            <RefreshCw size={16} className="text-slate-600 cursor-pointer hover:text-disco-cyan hover:rotate-180 transition-all duration-700" />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex justify-between text-[10px] font-mono text-slate-400">
-              <span>ЗАНЯТО: 42.5 ГБ</span>
-              <span>ВСЕГО: 100 ГБ</span>
-            </div>
-            <div className="h-1.5 w-full bg-black/40 rounded-full overflow-hidden border border-white/5">
-              <div className="h-full bg-gradient-to-r from-disco-cyan to-disco-purple" style={{ width: '42.5%' }} />
-            </div>
-          </div>
-        </section>
-
-        {/* НАСТРОЙКА LRU-КЭША (Требование ТЗ) */}
-        <section className="p-4 rounded-2xl bg-white/5 border border-white/10 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-2 opacity-10">
-             <HardDrive size={60} className="text-disco-magenta" />
-          </div>
-          
-          <h2 className="text-xs font-bold uppercase tracking-[3px] text-disco-magenta mb-4">Настройка кэша (LRU)</h2>
-          
-          <div className="space-y-6">
-            <div>
-              <div className="flex justify-between mb-4">
-                 <span className="text-[10px] text-slate-400 font-mono uppercase">Лимит размера:</span>
-                 <span className="text-sm font-black text-disco-magenta drop-shadow-[0_0_8px_rgba(255,0,255,0.6)]">{cacheLimit} ГБ</span>
+      {/* STORAGE CONNECTIONS */}
+      <section onMouseDown={e => e.stopPropagation()} className="mb-6 space-y-4">
+        {connections.map((conn) => {
+          const isCritical = conn.percent > 90;
+          return (
+            <div key={conn.id} className={`${retroBox} ${conn.color} p-4 flex items-center justify-between`}>
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-black opacity-60 uppercase leading-none">Cloud Storage</span>
+                <span className="font-black text-sm tracking-tight leading-none">{conn.name}</span>
+                {/* ДАННЫЕ В ГБ */}
+                <span className="text-[11px] font-bold bg-white/40 px-1 border border-retro-dark w-fit mt-1">
+                  {conn.used} / {conn.total}
+                </span>
               </div>
               
-              <input 
-                type="range" 
-                min="1" 
-                max="50" 
-                value={cacheLimit} 
-                onChange={(e) => setCacheLimit(e.target.value)}
-                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-disco-magenta"
-              />
+              <div className="flex items-center gap-3">
+                <div 
+                  className="text-right cursor-help" 
+                  title={isCritical ? "Место почти закончилось! Скоро сработает LRU-очистка кэша." : `Занято ${conn.percent}% облачного пространства.`}
+                >
+                  <span className={`text-2xl font-black leading-none ${isCritical ? 'text-retro-red animate-pulse' : 'text-retro-dark'}`}>
+                    {conn.percent}%
+                  </span>
+                </div>
+                
+                <div 
+                  className={`${retroBox} bg-white p-2 rounded-full cursor-help`}
+                  title={conn.status === 'synced' ? "Все файлы актуальны (Синхронизировано)" : "Облако проверяет изменения..."}
+                >
+                   {conn.status === 'synced' ? 
+                    <CheckCircle2 className="text-retro-green" size={20} /> : 
+                    <RefreshCcw className="text-retro-purple animate-spin" size={20} />
+                   }
+                </div>
+              </div>
             </div>
+          );
+        })}
+      </section>
 
-            <div className="flex justify-between items-center bg-black/30 p-3 rounded-lg border border-white/5">
-               <div className="flex flex-col">
-                  <span className="text-[9px] text-slate-500 font-mono italic">Кэш очистится при превышении</span>
-               </div>
-               <button className="p-2 bg-disco-magenta/10 hover:bg-disco-magenta/20 text-disco-magenta rounded-lg transition-all border border-disco-magenta/20">
-                  <Trash2 size={14} />
-               </button>
-            </div>
+      {/* ACTION BUTTON */}
+      <button 
+        onMouseDown={e => e.stopPropagation()}
+        title="Настройка кэша, лимитов LRU и детальная статистика трафика"
+        className={`${retroBox} bg-retro-purple text-white w-full py-4 font-black flex items-center justify-center gap-3 mb-6 active:translate-x-[2px] active:translate-y-[2px] active:shadow-retro-hover hover:bg-opacity-90 cursor-pointer`}
+      >
+        <HardDrive size={20} /> СТАТИСТИКА И КЭШ
+      </button>
+
+      {/* HISTORY / ACTIVITY */}
+      <section onMouseDown={e => e.stopPropagation()} className={`${retroBox} bg-white p-4`}>
+        <div className="flex justify-between items-center mb-4 border-b-2 border-retro-dark pb-2">
+          <div className="flex items-center gap-2">
+            <h2 className="font-black text-sm uppercase">Активность</h2>
+            <Info size={14} className="opacity-30 cursor-help" title="Список последних измененных файлов в вашей системе" />
           </div>
-        </section>
-
-      </main>
-
-      {/* ПОДВАЛ СТАТУСА */}
-      <footer className="px-6 py-3 border-t border-white/5 bg-black/60 text-[9px] flex justify-between items-center text-slate-600 font-mono tracking-widest uppercase z-10">
-        <div className="flex items-center gap-1.5 text-disco-cyan">
-          <div className="w-1.5 h-1.5 rounded-full bg-disco-cyan animate-pulse shadow-[0_0_8px_#00ffff]" />
-          <span>Система активна</span>
+          <span className="bg-retro-pink text-[10px] font-black px-2 py-1 border border-retro-dark animate-pulse">LIVE</span>
         </div>
-        <div className="flex gap-4 italic font-bold">
-           <span>v 1.0.0-DEV</span>
+        
+        <div className="flex flex-col gap-2">
+          {[
+            { name: "very_long_filename_backup_final_v2.iso", date: "07.08" },
+            { name: "retro_vibes.png", date: "07.08" },
+            { name: "config.yaml", date: "06.08" }
+          ].map((file, i) => (
+            <div key={i} className="flex items-center justify-between group hover:bg-retro-bg p-1 px-2 border-b border-dashed border-retro-dark/20 last:border-0">
+              <div className="flex flex-col min-w-0 mr-2">
+                <span 
+                  className="text-[11px] font-black truncate uppercase italic tracking-tighter" 
+                  title={file.name} // ПОЛНОЕ ИМЯ ПРИ НАВЕДЕНИИ
+                >
+                  {file.name}
+                </span>
+                <span className="text-[9px] font-bold opacity-40 italic">UPDATED: {file.date}</span>
+              </div>
+              <button 
+                title="Открыть расположение файла в Dolphin"
+                className="text-retro-dark opacity-50 group-hover:opacity-100 hover:text-retro-blue transition-all"
+              >
+                <FolderOpen size={18} />
+              </button>
+            </div>
+          ))}
         </div>
-      </footer>
+
+        <button className="w-full mt-4 text-[10px] font-black flex items-center justify-center gap-1 hover:text-retro-purple transition-colors border-t border-retro-dark pt-3">
+          ПОКАЗАТЬ ВСЕ СОБЫТИЯ <ChevronRight size={14} />
+        </button>
+      </section>
     </div>
   );
-}
+};
 
 export default App;

@@ -22,6 +22,8 @@
   "homepage": "https://github.com/FunDuckich/disco-hack#readme",
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
+    "@tauri-apps/api": "^2.10.1",
+    "framer-motion": "^12.38.0",
     "lucide-react": "^1.8.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
