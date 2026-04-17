@@ -1,25 +1,21 @@
 import asyncio
-import os
 import sys
+from pathlib import Path
 
-# Добавляем путь к корню проекта, чтобы импорты работали
-root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if root_path not in sys.path:
-    sys.path.insert(0, root_path)
+_daemon_dir = Path(__file__).resolve().parent
+if str(_daemon_dir) not in sys.path:
+    sys.path.insert(0, str(_daemon_dir))
 
-from daemon.database.manager import DBManager
+from database.manager import DBManager
 
 
 async def seed():
-    # Используем DBManager — он знает, где лежит правильная база
     db_manager = DBManager()
-    # Убеждаемся, что таблицы созданы
     await db_manager.init_db()
 
     db = await db_manager.get_db()
 
     files = []
-    # Добавляем папки
     files.append((None, "Work", 0, 1, "yandex", "disk:/Work"))
     files.append((None, "Photos", 0, 1, "nextcloud", "nc:/Photos"))
 

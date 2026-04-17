@@ -1,3 +1,4 @@
+import asyncio
 import os
 import stat
 import errno
@@ -5,6 +6,8 @@ import pyfuse3
 import pyfuse3.asyncio
 import time
 import logging
+
+from core.yandex_folder_sync import folder_sync_after_readdir
 
 log = logging.getLogger(__name__)
 
@@ -80,13 +83,23 @@ class CloudFusionVFS(pyfuse3.Operations):
         for i, row in enumerate(entries[off:], start=off):
             child_inode = self._get_inode(row['id'])
             attr = pyfuse3.EntryAttributes()
-            # Заполняем минимальные атрибуты для readdir
             attr.st_ino = child_inode
             attr.st_mode = (stat.S_IFDIR | 0o755) if row['is_dir'] else (stat.S_IFREG | 0o644)
 
-            # Важный момент: передаем имя как байты
             if not pyfuse3.readdir_reply(token, row['name'].encode('utf-8'), attr, i + 1):
                 break
+
+        try:
+            asyncio.get_running_loop().create_task(
+                folder_sync_after_readdir(
+                    self.db_manager,
+                    self.cloud_api,
+                    inode,
+                    parent_db_id,
+                )
+            )
+        except RuntimeError:
+            log.warning("[sync] нет активного event loop — фоновая синхронизация пропущена")
 
     async def open(self, inode, flags, ctx):
         db_id = self.inode_2_dbid.get(inode)

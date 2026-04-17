@@ -1,30 +1,29 @@
 import asyncio
+import logging
 import os
+import sys
+from pathlib import Path
+
+_daemon_dir = Path(__file__).resolve().parent.parent
+if str(_daemon_dir) not in sys.path:
+    sys.path.insert(0, str(_daemon_dir))
 
 import pyfuse3
 import pyfuse3.asyncio
 
-import logging
-import sys
-
-root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if root_path not in sys.path:
-    sys.path.insert(0, root_path)
-
-from daemon.core.vfs import CloudFusionVFS
-from daemon.database.manager import DBManager
-from daemon.database.importer import import_cloud_to_db
-from daemon.cloud_api.yandex import YandexDiskAsyncClient
+from cloud_api.yandex import YandexDiskAsyncClient
+from core.vfs import CloudFusionVFS
+from core.yandex_folder_sync import merge_last_uploaded_loop
+from database.importer import import_cloud_to_db
+from database.manager import DBManager
 
 log = logging.getLogger(__name__)
 
 logging.basicConfig(level=logging.INFO)
 
-log = logging.getLogger(__name__)
 
 async def start_cloud_fusion():
     mountpoint = os.path.expanduser("~/CloudFusion")
-    db_path = "cloudfusion.db"
     os.makedirs(mountpoint, exist_ok=True)
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -52,6 +51,7 @@ async def start_cloud_fusion():
         logging.error(f"Ошибка синхронизации: {e}")
 
     vfs = CloudFusionVFS(db_manager, cloud_api)
+    poll_task = asyncio.create_task(merge_last_uploaded_loop(db_manager, cloud_api))
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=cloudfusion')
@@ -66,6 +66,11 @@ async def start_cloud_fusion():
     except Exception as e:
         logging.error(f"Критическая ошибка FUSE: {e}")
     finally:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
         pyfuse3.close()
         logging.info("Диск отмонтирован.")
 
@@ -73,8 +78,6 @@ async def start_cloud_fusion():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     try:
-        # Запускаем один единственный Event Loop
         asyncio.run(start_cloud_fusion())
     except KeyboardInterrupt:
         logging.info("Демон остановлен пользователем.")
-
