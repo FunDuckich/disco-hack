@@ -1,27 +1,21 @@
 import asyncio
 import logging
 import os
-import sys
 import webbrowser
 from contextlib import asynccontextmanager
-from pathlib import Path
-
-_daemon_dir = Path(__file__).resolve().parent
-if str(_daemon_dir) not in sys.path:
-    sys.path.insert(0, str(_daemon_dir))
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import HTMLResponse
 
-from api.middleware import LoggingMiddleware
-from api.schemas import FileItem, PinResponse, SearchResult, StatsResponse
-from cloud_api.auth import YandexAuthenticator
-from cloud_api.yandex import YandexDiskAsyncClient
-from core.lru_engine import run_lru_cleanup
-from core.yandex_folder_sync import merge_last_uploaded, sync_yandex_folder_if_stale
-from database.manager import DBManager
+from .api.middleware import LoggingMiddleware
+from .api.schemas import FileItem, PinResponse, SearchResult, StatsResponse
+from .cloud_api.auth import YandexAuthenticator
+from .cloud_api.yandex import YandexDiskAsyncClient
+from .core.lru_engine import run_lru_cleanup
+from .core.yandex_folder_sync import merge_last_uploaded, sync_yandex_folder_if_stale
+from .database.manager import DBManager
 
 CACHE_DIR = "~/.cache/cloud-fusion/"
 MAX_CACHE_GB = 5

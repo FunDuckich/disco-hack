@@ -6,9 +6,9 @@ import time
 
 import pyfuse3
 
-from cloud_api.yandex import YandexDiskAsyncClient
-from database.importer import import_cloud_to_db
-from database.manager import DBManager
+from ..cloud_api.yandex import YandexDiskAsyncClient
+from ..database.importer import import_cloud_to_db
+from ..database.manager import DBManager
 
 log = logging.getLogger(__name__)
 
@@ -227,3 +227,4 @@ async def merge_last_uploaded_loop(
             minutes = 5.0
         minutes = max(0.5, minutes)
         await asyncio.sleep(minutes * 60.0)
+Ка

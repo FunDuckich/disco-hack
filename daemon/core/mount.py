@@ -1,21 +1,15 @@
 import asyncio
 import logging
 import os
-import sys
-from pathlib import Path
-
-_daemon_dir = Path(__file__).resolve().parent.parent
-if str(_daemon_dir) not in sys.path:
-    sys.path.insert(0, str(_daemon_dir))
 
 import pyfuse3
 import pyfuse3.asyncio
 
-from cloud_api.yandex import YandexDiskAsyncClient
-from core.vfs import CloudFusionVFS
-from core.yandex_folder_sync import merge_last_uploaded_loop
-from database.importer import import_cloud_to_db
-from database.manager import DBManager
+from ..cloud_api.yandex import YandexDiskAsyncClient
+from ..database.importer import import_cloud_to_db
+from ..database.manager import DBManager
+from .vfs import CloudFusionVFS
+from .yandex_folder_sync import merge_last_uploaded_loop
 
 log = logging.getLogger(__name__)
 

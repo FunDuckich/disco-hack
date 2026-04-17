@@ -1,12 +1,6 @@
 import asyncio
-import sys
-from pathlib import Path
 
-_daemon_dir = Path(__file__).resolve().parent
-if str(_daemon_dir) not in sys.path:
-    sys.path.insert(0, str(_daemon_dir))
-
-from database.manager import DBManager
+from .database.manager import DBManager
 
 
 async def seed():

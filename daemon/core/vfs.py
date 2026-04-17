@@ -7,7 +7,7 @@ import pyfuse3.asyncio
 import time
 import logging
 
-from core.yandex_folder_sync import folder_sync_after_readdir
+from .yandex_folder_sync import folder_sync_after_readdir
 
 log = logging.getLogger(__name__)
 

@@ -72,14 +72,17 @@
     cd disco-hack
     ```
 
-2.  **Настройте бэкенд:**
+2.  **Настройте бэкенд:** импорты внутри `daemon` — относительные, запускайте из **корня репозитория** (`disco-hack`), чтобы пакет `daemon` был виден Python.
     ```bash
+    cd disco-hack
     cd daemon
     python -m venv venv
-    source venv/bin/activate # На Windows: .\venv\Scripts\Activate.ps1
+    source venv/bin/activate
     pip install -r requirements.txt
-    python main.py
+    cd ..
+    python -m daemon.main
     ```
+    Альтернатива из корня: `python run_backend.py`. FUSE (Linux): `python -m daemon.core.mount`. Seed: `python -m daemon.seed`.
 
 3.  **Запустите интерфейс (в другом терминале):**
     ```bash

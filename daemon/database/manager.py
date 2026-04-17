@@ -2,7 +2,7 @@ import logging
 import aiosqlite
 import os
 
-from api.schemas import FileItem
+from ..api.schemas import FileItem
 
 class DBManager:
     def __init__(self, db_path="cloudfusion.db"):
