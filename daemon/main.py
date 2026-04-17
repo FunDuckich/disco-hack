@@ -42,25 +42,16 @@ def login_route():
     return {"status": "browser_opened"}
 
 @app.get("/callback", response_class=HTMLResponse)
-def yandex_callback(code: str = Query(...)):
+async def yandex_callback(code: str = Query(...)):
     token = YandexAuthenticator.get_token_from_code(code)
 
     if token:
-        # TODO: Сохранить токен в SQLite! 
-        # Теперь у тебя есть доступ к объекту `db`, 
-        # можешь попросить коллегу добавить метод вроде await db.save_token(token)
-        print(f"🔥 Успех! Получен токен пользователя: {token}")
+        await db.set_config("yandex_token", token)
+        print(f"🔥 Токен успешно сохранен в БД")
 
-        return """
-        <html>
-            <body style="display:flex; justify-content:center; align-items:center; height:100vh; font-family:sans-serif; background:#f4f4f4;">
-                <div style="background:white; padding:40px; border-radius:10px; box-shadow:0 4px 10px rgba(0,0,0,0.1); text-align:center;">
-                    <h2 style="color:#28a745;">CloudFusion успешно подключен!</h2>
-                    <p>Теперь вы можете закрыть эту вкладку и вернуться в приложение.</p>
-                </div>
-            </body>
-        </html>
-        """
+        # Можно отправить сигнал (через событие или переменную),
+        # чтобы FUSE узнал о появлении токена
+        return "<h1>Успешно! Теперь вернитесь в приложение.</h1>"
     else:
         return "<h1>Ошибка авторизации</h1>"
 

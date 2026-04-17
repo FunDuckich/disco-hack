@@ -1,51 +1,45 @@
+# daemon/cloud_api/yandex.py
 import yadisk
-from typing import List, Dict
-from .base import BaseCloudClient
+import logging
 
-
-class YandexDiskClient(BaseCloudClient):
+class YandexDiskAsyncClient:
     def __init__(self, token: str):
-        self.client = yadisk.Client(token=token)
+        # Используем АСИНХРОННОГО клиента!
+        self.client = yadisk.AsyncClient(token=token)
 
-        # Проверяем токен на валидность сразу при запуске
-        if not self.client.check_token():
-            print("[ERROR] Неверный токен Яндекс.Диска!")
+    async def check_connection(self):
+        is_valid = await self.client.check_token()
+        if not is_valid:
+            logging.error("Токен Яндекса недействителен!")
+        return is_valid
 
-    def get_metadata(self, path: str = "/") -> List[Dict]:
-        print(f"[Yandex API] Запрашиваю метаданные для: {path}")
-        result = []
-
+    # ВАЖНО: Метод называется именно download, так как ребята 
+    # в core/vfs.py вызывают await self.cloud_api.download(...)
+    async def download(self, remote_path: str, local_path: str):
+        logging.info(f"[Yandex API] Скачиваю из облака: {remote_path}")
         try:
-            for item in self.client.listdir(path):
+            await self.client.download(remote_path, local_path)
+            logging.info(f"[Yandex API] Скачивание {remote_path} завершено.")
+        except Exception as e:
+            logging.error(f"[Yandex API] Ошибка скачивания {remote_path}: {e}")
+            raise e
+
+    # Этот метод понадобится для importer.py
+    async def get_all_files_flat(self) -> list:
+        logging.info("[Yandex API] Получаю дерево файлов...")
+        result = []
+        try:
+            # Получаем все файлы рекурсивно (flat=True)
+            # Это может занять время, если файлов много
+            async for item in self.client.listdir("disk:/", limit=10000):
                 result.append({
+                    "path": item.path,
+                    "type": "dir" if item.type == "dir" else "file",
                     "name": item.name,
-                    "is_dir": item.type == "dir",
                     "size": item.size or 0,
-                    "etag": item.revision,  # Ревизия для проверки синхронизации
-                    "path": item.path
+                    "revision": item.revision
                 })
             return result
-        except yadisk.exceptions.PathNotFoundError:
-            print(f"[ERROR] Путь {path} не найден")
+        except Exception as e:
+            logging.error(f"[Yandex API] Ошибка получения структуры: {e}")
             return []
-        except Exception as e:
-            print(f"[ERROR] Ошибка API: {e}")
-            return []
-
-    def download_file(self, remote_path: str, local_path: str) -> bool:
-        print(f"[Yandex API] Скачиваю {remote_path} в {local_path}")
-        try:
-            self.client.download(remote_path, local_path)
-            return True
-        except Exception as e:
-            print(f"[ERROR] Ошибка скачивания: {e}")
-            return False
-
-    def upload_file(self, local_path: str, remote_path: str) -> bool:
-        print(f"[Yandex API] Загружаю {local_path} в {remote_path}")
-        try:
-            self.client.upload(local_path, remote_path)
-            return True
-        except Exception as e:
-            print(f"[ERROR] Ошибка загрузки: {e}")
-            return False

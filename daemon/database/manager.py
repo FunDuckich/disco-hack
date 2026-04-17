@@ -9,6 +9,13 @@ class DBManager:
     async def init_db(self):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
+                CREATE TABLE IF NOT EXISTS config(
+                   key TEXT PRIMARY KEY,
+                   value TEXT
+                )
+            ''')
+
+            await db.execute('''
                 CREATE TABLE IF NOT EXISTS files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     parent_id INTEGER,
@@ -32,6 +39,23 @@ class DBManager:
             await db.execute('CREATE INDEX IF NOT EXISTS idx_parent ON files(parent_id)')
             await db.commit()
             logging.info("Database initialized successfully")
+
+    async def set_config(self, key: str, value: str):
+        """Сохраняет настройку (например, токен)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                (key, value)
+            )
+            await db.commit()
+
+    async def get_config(self, key: str):
+        """Достает настройку по ключу"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT value FROM config WHERE key = ?", (key,))
+            row = await cursor.fetchone()
+            return row['value'] if row else None
 
     async def bulk_upsert_metadata(self, metadata_list: list[dict]):
         async with aiosqlite.connect(self.db_path) as db:
