@@ -4,7 +4,7 @@ import aiosqlite
 
 
 async def seed():
-    async with aiosqlite.connect("core/cloudfusion.db") as db:
+    async with aiosqlite.connect("cloudfusion.db") as db:
         files = []
         # Добавляем папки
         files.append((None, "Work", 0, 1, "yandex", "disk:/Work"))
