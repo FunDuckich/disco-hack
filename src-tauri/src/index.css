@@ -1,0 +1,23 @@
+@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-disco-dark text-slate-100 antialiased selection:bg-disco-magenta/30;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+.disco-border {
+  border: 1px solid;
+  border-image-source: linear-gradient(45deg, #00ffff, #ff00ff);
+  border-image-slice: 1;
+}
+
+.bg-noise {
+  background-image: url("https://grainy-gradients.vercel.app/noise.svg");
+  filter: contrast(150%) brightness(100%);
+  opacity: 0.05;
+}
