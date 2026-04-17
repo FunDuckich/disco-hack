@@ -4,7 +4,6 @@ import logging
 
 class YandexDiskAsyncClient:
     def __init__(self, token: str):
-        # Используем АСИНХРОННОГО клиента!
         self.client = yadisk.AsyncClient(token=token)
 
     async def check_connection(self):
@@ -13,8 +12,6 @@ class YandexDiskAsyncClient:
             logging.error("Токен Яндекса недействителен!")
         return is_valid
 
-    # ВАЖНО: Метод называется именно download, так как ребята 
-    # в core/vfs.py вызывают await self.cloud_api.download(...)
     async def download(self, remote_path: str, local_path: str):
         logging.info(f"[Yandex API] Скачиваю из облака: {remote_path}")
         try:
@@ -24,7 +21,6 @@ class YandexDiskAsyncClient:
             logging.error(f"[Yandex API] Ошибка скачивания {remote_path}: {e}")
             raise e
 
-    # Этот метод понадобится для importer.py
     async def get_all_files_flat(self) -> list:
         logging.info("[Yandex API] Получаю дерево файлов...")
         result = []

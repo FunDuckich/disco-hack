@@ -4,6 +4,8 @@ import pyfuse3
 import pyfuse3.asyncio
 import logging
 import sys
+
+from cloud_api.nextcloud import NextcloudAsyncClient
 from vfs import CloudFusionVFS
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if root_path not in sys.path:
@@ -21,40 +23,44 @@ async def mount():
     db_path = "cloudfusion.db"
     os.makedirs(mountpoint, exist_ok=True)
 
-    # 1. Инициализация менеджера базы данных
     db_manager = DBManager(db_path)
     await db_manager.init_db()
 
+    cloud_api = None
+    cloud_type = None
 
-    # 2. ЦИКЛ ОЖИДАНИЯ ТОКЕНА
-    token = None
-    while not token:
-        token = await db_manager.get_config("yandex_token")
-        if not token:
-            logging.info("Ожидание авторизации пользователя через GUI...")
-            await asyncio.sleep(5) # Проверяем базу каждые 5 секунд
+    while not cloud_api:
+        yandex_token = await db_manager.get_config("yandex_token")
+
+        nc_host = await db_manager.get_config("nc_host")
+        nc_login = await db_manager.get_config("nc_login")
+        nc_password = await db_manager.get_config("nc_password")
+
+        if yandex_token:
+            logging.info("Найден токен Яндекса. Инициализация...")
+            cloud_api = YandexDiskAsyncClient(token=yandex_token)
+            cloud_type = "yandex"
+
+        elif nc_host and nc_login and nc_password:
+            logging.info("Найдены данные Nextcloud. Инициализация...")
+            cloud_api = NextcloudAsyncClient(nc_host, nc_login, nc_password)
+            cloud_type = "nextcloud"
+
         else:
-            logging.info("Токен найден! Начинаю подключение к облаку...")
+            logging.info("Ожидание авторизации через GUI...")
+            await asyncio.sleep(5)  # Ждем 5 секунд и проверяем базу снова
 
-    # 3. Инициализация API клиента с реальным токеном
-    cloud_api = YandexDiskAsyncClient(token=token)
-
-    # 4. ПРЕДВАРИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ
-    # Подтягиваем дерево файлов, чтобы VFS сразу знала структуру облака
     try:
-        logging.info("Синхронизация структуры файлов...")
+        logging.info(f"Синхронизация дерева файлов для {cloud_type}...")
         cloud_files = await cloud_api.get_all_files_flat()
         if cloud_files:
-            await import_cloud_to_db(db_manager, cloud_files, cloud_type="yandex")
+            await import_cloud_to_db(db_manager, cloud_files, cloud_type=cloud_type)
     except Exception as e:
         logging.error(f"Ошибка при первичной синхронизации: {e}")
-        # Если нет интернета, FUSE все равно можно запустить (будет работать оффлайн-кеш)
 
-    # 5. Настройка и запуск FUSE
     vfs = CloudFusionVFS(db_manager, cloud_api)
     fuse_options = set(pyfuse3.default_options)
-    # allow_other позволяет другим пользователям/процессам видеть диск
-    # fuse_options.add('allow_other')
+    fuse_options.add('allow_other')
 
     pyfuse3.asyncio.enable()
 
