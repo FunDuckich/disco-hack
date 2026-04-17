@@ -9,6 +9,7 @@ root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if root_path not in sys.path:
     sys.path.insert(0, root_path)
 
+from daemon.core.vfs import CloudFusionVFS
 from daemon.database.manager import DBManager
 from daemon.database.importer import import_cloud_to_db
 from daemon.cloud_api.yandex import YandexDiskAsyncClient
@@ -23,6 +24,7 @@ async def mount():
     # 1. Инициализация менеджера базы данных
     db_manager = DBManager(db_path)
     await db_manager.init_db()
+
 
     # 2. ЦИКЛ ОЖИДАНИЯ ТОКЕНА
     token = None
@@ -62,9 +64,13 @@ async def mount():
         await pyfuse3.main()
     except Exception as e:
         logging.error(f"Критическая ошибка FUSE: {e}")
+
     finally:
         pyfuse3.close()
         logging.info("Диск успешно отмонтирован.")
 
 if __name__ == '__main__':
-    asyncio.run(mount())
+    try:
+        asyncio.run(mount())
+    except KeyboardInterrupt:
+        pass

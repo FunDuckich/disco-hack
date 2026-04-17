@@ -1,5 +1,6 @@
 # daemon/database/importer.py
 import logging
+import aiosqlite
 
 import aiosqlite
 
