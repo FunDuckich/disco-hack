@@ -3,9 +3,24 @@ import aiosqlite
 
 
 class DBManager:
-    def __init__(self, db_path="core/cloudfusion.db"):
+    def __init__(self, db_path="cloudfusion.db"):
+        print(db_path)
         self.db_path = db_path
         self._db = None
+
+        if not os.path.isabs(db_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            self.db_path = os.path.join(base_dir, db_path)
+        else:
+            self.db_path = db_path
+
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            logging.info(f"Создана директория для базы: {db_dir}")
+
+        self._db = None
+        logging.info(f"DBManager инициализирован с путем: {self.db_path}")
 
     async def get_db(self):
         if self._db is None:
