@@ -31,56 +31,54 @@ class DBManager:
         return self._db
 
     async def init_db(self):
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS config(
-                   key TEXT PRIMARY KEY,
-                   value TEXT
-                )
-            ''')
+        db = await self.get_db()
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS config(
+               key TEXT PRIMARY KEY,
+               value TEXT
+            )
+        ''')
 
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS files (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    parent_id INTEGER,
-                    name TEXT NOT NULL,
-                    size INTEGER DEFAULT 0,
-                    is_dir BOOLEAN DEFAULT 0,
-                    cloud_type TEXT,
-                    remote_path TEXT,
-                    local_path TEXT,
-                    etag TEXT,
-                    status TEXT DEFAULT 'stub', 
-                    is_pinned BOOLEAN DEFAULT 0,
-                    last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(cloud_type, remote_path)
-                )
-            ''')
-            await db.execute('''
-                CREATE VIRTUAL TABLE IF NOT EXISTS files_fts 
-                USING fts5(name, content='files', content_rowid='id')
-            ''')
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_parent ON files(parent_id)')
-            await db.commit()
-            logging.info("Database initialized successfully")
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_id INTEGER,
+                name TEXT NOT NULL,
+                size INTEGER DEFAULT 0,
+                is_dir BOOLEAN DEFAULT 0,
+                cloud_type TEXT,
+                remote_path TEXT,
+                local_path TEXT,
+                etag TEXT,
+                status TEXT DEFAULT 'stub', 
+                is_pinned BOOLEAN DEFAULT 0,
+                last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(cloud_type, remote_path)
+            )
+        ''')
+        await db.execute('''
+            CREATE VIRTUAL TABLE IF NOT EXISTS files_fts 
+            USING fts5(name, content='files', content_rowid='id')
+        ''')
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_parent ON files(parent_id)')
+        await db.commit()
+        logging.info("Database initialized successfully")
 
 
     async def set_config(self, key: str, value: str):
-        """Сохраняет настройку (например, токен)"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-                (key, value)
-            )
-            await db.commit()
+        db = await self.get_db()
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+        await db.commit()
 
     async def get_config(self, key: str):
-        """Достает настройку по ключу"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT value FROM config WHERE key = ?", (key,))
-            row = await cursor.fetchone()
-            return row['value'] if row else None
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT value FROM config WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        return row['value'] if row else None
 
     async def bulk_upsert_metadata(self, metadata_list: list[dict]):
         db = await self.get_db()
