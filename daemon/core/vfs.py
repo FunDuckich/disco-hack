@@ -48,6 +48,30 @@ class CloudFusionVFS(pyfuse3.Operations):
         self.next_inode = pyfuse3.ROOT_INODE + 1
         self._next_write_fh = _WRITE_FH_BASE
         self._write_handles: dict[int, dict] = {}
+        self._stub_fetch_locks: dict[int, asyncio.Lock] = {}
+
+    def _stub_lock(self, db_id: int) -> asyncio.Lock:
+        if db_id not in self._stub_fetch_locks:
+            self._stub_fetch_locks[db_id] = asyncio.Lock()
+        return self._stub_fetch_locks[db_id]
+
+    async def _ensure_file_cached(self, db_id: int) -> None:
+        async with self._stub_lock(db_id):
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row or row.get("is_dir"):
+                return
+            if row.get("status") != "stub":
+                return
+            cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+            os.makedirs(cache_dir, exist_ok=True)
+            local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
+            cloud_type = row["cloud_type"]
+            target = self._client_for_cloud_type(cloud_type)
+            if not target:
+                raise pyfuse3.FUSEError(errno.EIO)
+            log.info("FUSE: загрузка в кэш %s...", row["name"])
+            await target.download(row["remote_path"], local_path)
+            await self.db_manager.update_downloaded_file(db_id, local_path)
 
     def _client_for_cloud_type(self, cloud_type: str | None):
         if not cloud_type:
@@ -195,19 +219,6 @@ class CloudFusionVFS(pyfuse3.Operations):
 
         accmode = flags & os.O_ACCMODE
         if accmode == os.O_RDONLY:
-            if row["status"] == "stub":
-                log.info("FUSE: ленивая загрузка файла %s...", row["name"])
-                cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
-                os.makedirs(cache_dir, exist_ok=True)
-                local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
-
-                cloud_type = row["cloud_type"]
-                target_client = self._client_for_cloud_type(cloud_type)
-                if not target_client:
-                    raise pyfuse3.FUSEError(errno.EIO)
-                await target_client.download(row["remote_path"], local_path)
-                await self.db_manager.update_downloaded_file(db_id, local_path)
-
             return pyfuse3.FileInfo(fh=inode)
 
         if accmode in (os.O_WRONLY, os.O_RDWR):
@@ -307,6 +318,10 @@ class CloudFusionVFS(pyfuse3.Operations):
         inode = fh
         db_id = self.inode_2_dbid.get(inode)
         row = await self.db_manager.get_file_by_id(db_id)
+
+        if row.get("status") == "stub":
+            await self._ensure_file_cached(db_id)
+            row = await self.db_manager.get_file_by_id(db_id)
 
         local_path = row["local_path"]
         if not local_path or not os.path.exists(local_path):
