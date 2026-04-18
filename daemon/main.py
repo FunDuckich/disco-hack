@@ -35,6 +35,7 @@ db = DBManager(DB_PATH)
 async def lifespan(app: FastAPI):
     os.makedirs(os.path.expanduser(CACHE_DIR), exist_ok=True)
     await db.init_db()
+    await db.ensure_yandex_disk_root_folder()
     lru_task = asyncio.create_task(lru_scheduler())
     yield
     lru_task.cancel()
@@ -127,7 +128,15 @@ async def api_sync_folder(
     ),
 ):
     client = await _yandex_client_or_401()
-    changed = await sync_yandex_folder_if_stale(db, client, parent_id, force=force)
+    effective_parent = parent_id
+    if effective_parent is None:
+        wid = await db.get_yandex_disk_wrapper_id()
+        if wid is None:
+            wid = await db.ensure_yandex_disk_root_folder()
+        effective_parent = wid
+    changed = await sync_yandex_folder_if_stale(
+        db, client, effective_parent, force=force
+    )
     return {"ok": True, "changed": changed}
 
 

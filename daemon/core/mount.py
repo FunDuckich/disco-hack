@@ -39,6 +39,7 @@ async def start_cloud_fusion():
 
     db_manager = DBManager(db_path)
     await db_manager.init_db()
+    yandex_root_id = await db_manager.ensure_yandex_disk_root_folder()
 
     token = None
     while not token:
@@ -54,7 +55,12 @@ async def start_cloud_fusion():
         logging.info("Синхронизация структуры файлов...")
         cloud_files = await cloud_api.get_all_files_flat()
         if cloud_files:
-            await import_cloud_to_db(db_manager, cloud_files, cloud_type="yandex")
+            await import_cloud_to_db(
+                db_manager,
+                cloud_files,
+                cloud_type="yandex",
+                path_to_id_seed={"": yandex_root_id},
+            )
     except Exception as e:
         logging.error(f"Ошибка синхронизации: {e}")
 

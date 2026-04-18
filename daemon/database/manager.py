@@ -64,6 +64,51 @@ class DBManager:
         await db.commit()
         logging.info("Database initialized successfully")
 
+    async def get_yandex_disk_wrapper_id(self) -> int | None:
+        db = await self.get_db()
+        cur = await db.execute(
+            "SELECT id FROM files WHERE cloud_type = 'yandex' AND remote_path = 'disk:/' LIMIT 1"
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else None
+
+    async def ensure_yandex_disk_root_folder(self) -> int:
+        db = await self.get_db()
+        wid = await self.get_yandex_disk_wrapper_id()
+        if wid is not None:
+            await db.execute(
+                """
+                UPDATE files SET parent_id = ?
+                WHERE cloud_type = 'yandex' AND parent_id IS NULL AND id != ?
+                """,
+                (wid, wid),
+            )
+            await db.commit()
+            return wid
+
+        stored_rev = await self.get_config("yandex_disk_root_folder_revision") or ""
+
+        cur = await db.execute(
+            """
+            INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag, status)
+            VALUES (NULL, 'YandexDisk', 1, 0, 'yandex', 'disk:/', ?, 'stub')
+            RETURNING id
+            """,
+            (stored_rev,),
+        )
+        row = await cur.fetchone()
+        new_id = int(row[0])
+        await self._fts_insert_row(db, new_id, "YandexDisk")
+        await db.execute(
+            """
+            UPDATE files SET parent_id = ?
+            WHERE cloud_type = 'yandex' AND parent_id IS NULL AND id != ?
+            """,
+            (new_id, new_id),
+        )
+        await db.commit()
+        return new_id
+
 
     async def set_config(self, key: str, value: str):
         db = await self.get_db()
@@ -195,7 +240,7 @@ class DBManager:
 
     async def _fts_delete_row(self, db, rowid: int) -> None:
         await db.execute(
-            "INSERT INTO files_fts(files_fts, rowid, name) VALUES('delete', ?, NULL)",
+            "INSERT INTO files_fts(files_fts, rowid) VALUES('delete', ?)",
             (rowid,),
         )
 

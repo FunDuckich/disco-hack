@@ -170,7 +170,10 @@ async def merge_last_uploaded(db: DBManager, cloud_api: YandexDiskAsyncClient, l
         if not chain:
             continue
         try:
-            await import_cloud_to_db(db, chain, "yandex")
+            wid = await db.get_yandex_disk_wrapper_id()
+            if wid is None:
+                wid = await db.ensure_yandex_disk_root_folder()
+            await import_cloud_to_db(db, chain, "yandex", path_to_id_seed={"": wid})
             n += 1
         except Exception:
             log.exception("[sync] merge last-uploaded path=%s", getattr(res, "path", res))
@@ -183,6 +186,8 @@ async def folder_sync_after_readdir(
     dir_inode: int,
     parent_db_id: int | None,
 ) -> None:
+    if parent_db_id is None:
+        return
     if not _debounce_ok(parent_db_id):
         return
     key = _parent_key(parent_db_id)
