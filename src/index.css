@@ -30,8 +30,18 @@
 }
 
 @layer base {
+  html {
+    background-color: var(--color-retro-bg);
+  }
+
   body {
     @apply bg-retro-bg text-retro-dark transition-colors duration-300;
+    min-height: 100vh;
+  }
+
+  #root {
+    min-height: 100vh;
+    background-color: var(--color-retro-bg);
   }
 
   .retro-border {

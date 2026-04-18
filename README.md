@@ -55,9 +55,21 @@
 
 ---
 
-## Установка и запуск: только RPM
+## Установка и запуск
 
-Официальная поставка для Linux — **один RPM-пакет** по [`packaging/rpm/cloudfusion.spec`](packaging/rpm/cloudfusion.spec). Полная инструкция по зависимостям ОС, сбоям и ручным шагам: **[packaging/rpm/README.md](packaging/rpm/README.md)**.
+### Без RPM: одна сборка в `target/release`
+
+Нужны **бинарь GUI и демон в одной папке**, без `rpm` и без установки в `/usr`:
+
+```bash
+./scripts/build-local-bundle.sh
+```
+
+или **`npm run linux:bundle`**. Затем запуск: **`./src-tauri/target/release/app`** (или **`cloudfusion`**, если так назвался бинарь — смотрите каталог `src-tauri/target/release/`). Подробности, dev-режим и только Python-демон: **[docs/LOCAL-BUNDLE.md](docs/LOCAL-BUNDLE.md)**.
+
+### RPM (официальная поставка для Linux)
+
+**Один RPM-пакет** по [`packaging/rpm/cloudfusion.spec`](packaging/rpm/cloudfusion.spec). Полная инструкция по зависимостям ОС, сбоям и ручным шагам: **[packaging/rpm/README.md](packaging/rpm/README.md)**.
 
 ### Сборка RPM у себя (кратко)
 
@@ -89,7 +101,7 @@ sudo rpm -Uvh /home/disco/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-1.x86_64.rpm
 
 (Подставьте своего пользователя и имя файла из **`ls …/RPMS/x86_64/`**.)
 
-Пункт в меню **CloudFusion**; для OAuth в сеансе нужны **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (см. [`daemon/.env.example`](daemon/.env.example)). После установки перезапустите Dolphin для KIO — [`integration/README.md`](integration/README.md).
+Пункт в меню **CloudFusion**; для OAuth задайте **`YANDEX_*`** в **`~/.config/cloudfusion/.env`** или в окружении сеанса (см. [`daemon/.env.example`](daemon/.env.example)); без ключей для отладки UI — **`CLOUDFUSION_MOCK_YANDEX=1`**. После установки перезапустите Dolphin для KIO — [`integration/README.md`](integration/README.md).
 
 База SQLite по умолчанию: **`~/.local/share/cloudfusion/cloudfusion.db`** (`DB_PATH` в `daemon/.env` при ручном запуске демона).
 
