@@ -9,10 +9,10 @@ X-KDE-Submenu=CloudFusion
 Name=Save to Cache
 Name[ru]=Сохранить в кэш
 Icon=folder-download
-Exec=bash "%h/.local/share/cloudfusion/cf-save-cache.sh" %F
+Exec=bash -c '"$HOME/.local/share/cloudfusion/cf-save-cache.sh" "$@"' sh %F
 
 [Desktop Action CloudFusionDeleteCache]
 Name=Delete from Cache
 Name[ru]=Удалить из кэша
 Icon=edit-delete
-Exec=bash "%h/.local/share/cloudfusion/cf-delete-cache.sh" %F
+Exec=bash -c '"$HOME/.local/share/cloudfusion/cf-delete-cache.sh" "$@"' sh %F

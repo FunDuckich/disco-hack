@@ -5,8 +5,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPTS_DIR="$HOME/.local/share/cloudfusion"
-# KDE 5: ~/.local/share/kservices5/ServiceMenus/
-# KDE 6 / Dolphin 23+: ~/.local/share/kio/servicemenus/
 KDE5_DIR="$HOME/.local/share/kservices5/ServiceMenus"
 KDE6_DIR="$HOME/.local/share/kio/servicemenus"
 
@@ -20,18 +18,21 @@ for script in cf-save-cache.sh cf-delete-cache.sh; do
 done
 echo "  Scripts installed to $SCRIPTS_DIR"
 
-# Detect KDE version and install service menu to the right location
-install_desktop() {
-    local target_dir="$1"
+# Install to both KDE5 and KDE6 locations so it works regardless of version
+for target_dir in "$KDE5_DIR" "$KDE6_DIR"; do
     mkdir -p "$target_dir"
     cp "$REPO_ROOT/integration/desktop/cloudfusion.desktop" "$target_dir/cloudfusion.desktop"
     echo "  Service menu installed to $target_dir"
-}
+done
 
-if dolphin --version 2>/dev/null | grep -qE "^Dolphin [2-9][0-9]\."; then
-    install_desktop "$KDE6_DIR"
-else
-    install_desktop "$KDE5_DIR"
-fi
+# Rebuild the KDE service cache
+for cmd in kbuildsycoca6 kbuildsycoca5 kbuildsycoca; do
+    if command -v "$cmd" &>/dev/null; then
+        echo "  Rebuilding service cache via $cmd..."
+        "$cmd" --noincremental 2>/dev/null || true
+        break
+    fi
+done
 
-echo "Done. Restart Dolphin (or log out and back in) to activate the context menu."
+echo "Done. Restart Dolphin to activate the context menu:"
+echo "  dolphin --quit; dolphin &"
