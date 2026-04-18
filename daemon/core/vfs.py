@@ -410,6 +410,16 @@ class CloudFusionVFS(pyfuse3.Operations):
         s.f_namemax = 255
         return s
 
+    async def getxattr(self, inode, name, ctx=None):
+        """KDE/Dolphin может запрашивать xattr для превью; явно «нет атрибута»."""
+        eno = getattr(pyfuse3, "ENOATTR", None)
+        if eno is None:
+            eno = getattr(errno, "ENODATA", errno.EINVAL)
+        raise pyfuse3.FUSEError(eno)
+
+    async def listxattr(self, inode, ctx=None):
+        return []
+
     async def lookup(self, parent_inode, name, ctx=None):
         name_str = name.decode("utf-8")
         if name_str == ".":
