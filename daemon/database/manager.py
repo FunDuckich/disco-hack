@@ -292,9 +292,10 @@ class DBManager:
             await db.execute(q, ids)
         await db.commit()
 
-    async def insert_yandex_child(
+    async def insert_cloud_child(
         self,
         *,
+        cloud_type: str,
         parent_id: int | None,
         name: str,
         is_dir: bool,
@@ -308,7 +309,7 @@ class DBManager:
         cur = await db.execute(
             """
             INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag, status, local_path)
-            VALUES (?, ?, ?, ?, 'yandex', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
             """,
             (
@@ -316,6 +317,7 @@ class DBManager:
                 name,
                 1 if is_dir else 0,
                 size,
+                cloud_type,
                 remote_path,
                 etag,
                 status,
@@ -327,6 +329,30 @@ class DBManager:
         await self._fts_insert_row(db, rid, name)
         await db.commit()
         return rid
+
+    async def insert_yandex_child(
+        self,
+        *,
+        parent_id: int | None,
+        name: str,
+        is_dir: bool,
+        remote_path: str,
+        size: int = 0,
+        status: str = "stub",
+        etag: str = "",
+        local_path: str | None = None,
+    ) -> int:
+        return await self.insert_cloud_child(
+            cloud_type="yandex",
+            parent_id=parent_id,
+            name=name,
+            is_dir=is_dir,
+            remote_path=remote_path,
+            size=size,
+            status=status,
+            etag=etag,
+            local_path=local_path,
+        )
 
     async def delete_file_row_yandex(self, file_id: int) -> None:
         db = await self.get_db()
