@@ -12,7 +12,6 @@ ROOT = SPECDIR.parents[1]
 block_cipher = None
 
 hiddenimports = [
-    "aiofiles",
     "daemon",
     "daemon.main",
     "daemon.api",
@@ -37,20 +36,47 @@ hiddenimports = [
     "uvicorn.protocols.websockets.auto",
 ]
 
+extra_binaries = []
+extra_datas = []
+
 try:
-    from PyInstaller.utils.hooks import collect_submodules
+    from PyInstaller.utils.hooks import collect_all, collect_submodules
 
     hiddenimports += collect_submodules("daemon")
     hiddenimports += collect_submodules("starlette")
     hiddenimports += collect_submodules("fastapi")
+    # Nextcloud / HTTP: динамические импорты внутри nc_py_api и niquests
+    for pkg in (
+        "nc_py_api",
+        "niquests",
+        "yadisk",
+        "xmltodict",
+        "filelock",
+        "aiosqlite",
+        "httpx",
+        "httpcore",
+        "h11",
+        "certifi",
+        "pyfuse3",
+    ):
+        try:
+            d, b, h = collect_all(pkg)
+            extra_datas += d
+            extra_binaries += b
+            hiddenimports += h
+        except Exception:
+            try:
+                hiddenimports += collect_submodules(pkg)
+            except Exception:
+                pass
 except Exception:
     pass
 
 a = Analysis(
     [str(ROOT / "daemon" / "pyinstaller" / "entry.py")],
     pathex=[str(ROOT)],
-    binaries=[],
-    datas=[],
+    binaries=extra_binaries,
+    datas=extra_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
