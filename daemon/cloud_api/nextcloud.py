@@ -17,7 +17,6 @@ class NextcloudAsyncClient:
     async def check_connection(self) -> bool:
         logging.info("[Nextcloud] Проверка связи с сервером...")
         try:
-            # Передаем сохраненный логин для проверки
             await self.nc.users.get_user(self.login)
             logging.info("[Nextcloud] Подключение успешно!")
             return True
@@ -26,19 +25,14 @@ class NextcloudAsyncClient:
             return False
 
     async def download(self, remote_path: str, local_path: str):
-        # Очищаем путь от префикса, если он есть (для совместимости с БД)
         clean_path = remote_path.replace('nextcloud:', '')
         if not clean_path.startswith('/'):
             clean_path = '/' + clean_path
 
         logging.info(f"[Nextcloud] Скачиваю: {clean_path}")
         try:
-            # Скачиваем файл в память (в виде байт)
             file_bytes = await self.nc.files.download(clean_path)
 
-            # Сохраняем на диск
-            # Примечание для хакатона: обычный open() блокирует поток,
-            # по-хорошему тут нужен aiofiles, но для прототипа сойдет и так!
             with open(local_path, 'wb') as f:
                 f.write(file_bytes)
 
@@ -56,11 +50,9 @@ class NextcloudAsyncClient:
 
         result = []
         try:
-            # Получаем содержимое текущей папки
             nodes = await self.nc.files.listdir(path)
 
             for node in nodes:
-                # Добавляем префикс nextcloud: для нашей БД
                 full_path = f"nextcloud:{node.user_path}"
 
                 result.append({
@@ -71,7 +63,6 @@ class NextcloudAsyncClient:
                     "revision": node.etag
                 })
 
-                # Если это папка, рекурсивно ныряем в неё
                 if node.is_dir:
                     sub_files = await self.get_all_files_flat(node.user_path)
                     result.extend(sub_files)
