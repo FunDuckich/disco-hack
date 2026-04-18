@@ -49,6 +49,9 @@ try:
     for pkg in (
         "nc_py_api",
         "niquests",
+        "requests",
+        "urllib3",
+        "charset_normalizer",
         "yadisk",
         "xmltodict",
         "filelock",

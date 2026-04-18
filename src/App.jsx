@@ -10,22 +10,36 @@ import {
 const appWindow = getCurrentWindow();
 const API_BASE = "http://127.0.0.1:8000";
 
-// Логика из Второго компонента: более надежный fetch с таймаутом
-const apiFetch = async (endpoint, method = 'GET', body = null) => {
+/** В `tauri build` UI грузится с https://tauri.localhost — обычный fetch на http://127.0.0.1 часто блокируется как mixed content. */
+const isTauriShell = Boolean(import.meta.env.TAURI_ENV_PLATFORM);
+
+async function backendFetch(url, init = {}) {
+  if (isTauriShell) {
+    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    const { signal: _ignored, ...rest } = init;
+    return tauriFetch(url, { ...rest, connectTimeout: 15_000 });
+  }
+  return fetch(url, init);
+}
+
+const apiFetch = async (endpoint, method = "GET", body = null) => {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
-    const config = { 
-      method, 
-      signal: controller.signal,
-      headers: body ? { 'Content-Type': 'application/json' } : {}
+    const timeoutMs = isTauriShell ? 10_000 : 2_000;
+    const reqInit = {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : {},
     };
-    if (body) config.body = JSON.stringify(body);
-    
-    const res = await fetch(`${API_BASE}${endpoint}`, config);
-    clearTimeout(timeoutId);
+    if (body) reqInit.body = JSON.stringify(body);
+    const res = await Promise.race([
+      backendFetch(`${API_BASE}${endpoint}`, reqInit),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error("timeout")), timeoutMs),
+      ),
+    ]);
     return res.ok ? await res.json() : null;
-  } catch (e) { return null; }
+  } catch {
+    return null;
+  }
 };
 
 const App = () => {
@@ -65,19 +79,20 @@ const App = () => {
       if (stats) setRealStats(stats);
 
       const settings = await apiFetch('/api/settings');
-      if (settings && settings.cache_limit) setCacheLimit(settings.cache_limit);
+      if (settings && settings.max_cache_gb != null) {
+        setCacheLimit(settings.max_cache_gb);
+      }
     } else {
       setRealStats(null);
       setCloudStatus({ YANDEX: false, NEXTCLOUD: false });
     }
   };
 
-const updateCacheLimit = async (newLimit) => {
-  // Теперь минимум 1 ГБ, максимум 500 ГБ
-  if (newLimit < 1 || newLimit > 500) return; 
-  setCacheLimit(newLimit);
-  await apiFetch('/api/settings', 'POST', { cache_limit: newLimit });
-};
+  const updateCacheLimit = async (newLimit) => {
+    if (newLimit < 1 || newLimit > 500) return;
+    setCacheLimit(newLimit);
+    await apiFetch("/api/settings", "POST", { max_cache_gb: newLimit });
+  };
 
   useEffect(() => {
     refreshAppData();

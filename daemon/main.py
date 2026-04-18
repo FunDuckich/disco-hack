@@ -101,7 +101,7 @@ app.add_middleware(LoggingMiddleware)
 _cors_extra = [x.strip() for x in os.getenv("ALLOWED_ORIGINS", "").split(",") if x.strip()]
 _cors_regex_default = (
     r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
-    r"|^https://tauri\.localhost(:\d+)?$"
+    r"|^https?://tauri\.localhost(:\d+)?$"
     r"|^tauri://"
 )
 _cors_regex = os.getenv("CORS_ORIGIN_REGEX", "").strip() or _cors_regex_default

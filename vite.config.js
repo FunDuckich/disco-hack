@@ -8,6 +8,7 @@ export default defineConfig(async () => ({
         tailwindcss(),
   ],
 
+  envPrefix: ["VITE_", "TAURI_ENV_"],
   clearScreen: false,
   server: {
     port: 1420,
