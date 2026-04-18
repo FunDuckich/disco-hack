@@ -30,23 +30,6 @@
 
 ---
 
-## Почему папки на смонтированном диске были «пустыми»?
-
-Содержимое каталогов на FUSE-драйве берётся из **локального индекса SQLite**, который заполняется при старте демона из API Яндекс.Диска. Раньше вызывался только один уровень `listdir("disk:/")`: API отдаёт **только прямые** дочерние элементы корня. Вложенные файлы и папки не попадали в базу, поэтому в проводнике корень выглядел нормально, а при входе в любую подпапку — пусто (хотя в облаке там всё есть).
-
-**Исправление:** рекурсивный обход каталогов в `daemon/cloud_api/yandex.py` (`get_all_files_flat`). После обновления кода перезапустите демон; при необходимости удалите старую БД `daemon/database/cloudfusion.db`, чтобы пересобрать дерево с нуля.
-
----
-
-## Как проверить на Ubuntu (ручной тест)
-
-1. Установите зависимости демона, авторизуйте Яндекс через UI/эндпоинты, как в вашем сценарии.
-2. Запустите демон с FUSE; в логах должны появиться строки вроде «Всего записей в индексе: …» и при открытии папки — «Найдено N элементов в БД» с **N > 0** для непустых каталогов.
-3. В терминале: `ls -la ~/CloudFusion` и `ls -la ~/CloudFusion/ИмяПапки` — списки должны совпадать с тем, что видно в веб-интерфейсе Диска.
-4. Дополнительно можно проверить SQLite: `sqlite3 daemon/database/cloudfusion.db "SELECT parent_id, COUNT(*) FROM files GROUP BY parent_id;"` — для идентификаторов папок с детьми счётчики должны быть больше нуля.
-
----
-
 ## 📂 Структура проекта
 
 *   `/daemon` — Сердце проекта: FUSE-драйвер, работа с SQLite и API облаков.
@@ -75,16 +58,18 @@
 2.  **Настройте бэкенд:** импорты внутри `daemon` — относительные, запускайте из **корня репозитория** (`disco-hack`), чтобы пакет `daemon` был виден Python.
     ```bash
     cd disco-hack
-    cd daemon
-    python -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
+    pip install --ignored-installed -r deamon/requirements.txt
     cd ..
     python -m daemon.main
     ```
-    Альтернатива из корня: `python run_backend.py`. Seed: `python -m daemon.seed`.
+    в другом терминали :
+    ```
+    cd disco-hack
+    python -m daemon.core.mount
+    ```
+    
 
-3.  **FUSE (mount) — только Linux / WSL.** Скрипт `daemon/core/mount.py` **нельзя** запускать как файл (`python .../mount.py`): относительные импорты работают только как модуль пакета `daemon` из **корня репозитория**.
+4.  **FUSE (mount) — только Linux / WSL.** Скрипт `daemon/core/mount.py` **нельзя** запускать как файл (`python .../mount.py`): относительные импорты работают только как модуль пакета `daemon` из **корня репозитория**.
     ```bash
     cd /mnt/c/Documents/GitHub/disco-hack
     source daemon/venv/bin/activate
@@ -94,7 +79,7 @@
 
     **PyCharm:** Run → Edit Configurations → **+** → Python → **Module name:** `daemon.core.mount` → **Working directory:** корень проекта (`disco-hack`, переменная `$ProjectFileDir$`). Интерпретатор — WSL, где стоят `pyfuse3` и `libfuse`. Либо **Script path:** `run_mount.py`, working directory — снова корень репо.
 
-4.  **Запустите интерфейс (в другом терминале):**
+5.  **Запустите интерфейс (в другом терминале):**
     ```bash
     npm install
     npm run tauri dev
