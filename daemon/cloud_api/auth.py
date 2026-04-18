@@ -1,6 +1,6 @@
 import yadisk
 
-from config import settings
+from ..config import settings
 
 
 class YandexAuthenticator:
