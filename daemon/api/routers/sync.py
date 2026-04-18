@@ -18,7 +18,15 @@ def make_router(db: DBManager) -> APIRouter:
         force: bool = Query(default=True, description="True — всегда перезапросить API"),
     ):
         client = await _yandex_client_or_401()
-        changed = await sync_yandex_folder_if_stale(db, client, parent_id, force=force)
+        effective_parent = parent_id
+        if effective_parent is None:
+            wid = await db.get_yandex_disk_wrapper_id()
+            if wid is None:
+                wid = await db.ensure_yandex_disk_root_folder()
+            effective_parent = wid
+        changed = await sync_yandex_folder_if_stale(
+            db, client, effective_parent, force=force
+        )
         return {"ok": True, "changed": changed}
 
     @router.post("/last-uploaded")

@@ -62,6 +62,7 @@ async def _cancel(task: asyncio.Task | None) -> None:
 async def lifespan(app: FastAPI):
     os.makedirs(os.path.expanduser(settings.cache_dir), exist_ok=True)
     await db.init_db()
+    await db.ensure_yandex_disk_root_folder()
     saved_max = await db.get_config("max_cache_gb")
     if saved_max is not None:
         settings.max_cache_gb = float(saved_max)

@@ -18,11 +18,26 @@ logging.basicConfig(level=logging.INFO)
 
 
 async def start_cloud_fusion():
+    if os.geteuid() == 0:
+        msg = (
+            "монтирование FUSE от root недоступно: обычные процессы (Dolphin) не увидят файловую систему. "
+            "запустите без sudo"
+        )
+        if os.environ.get("SUDO_UID"):
+            msg += " (или залогиньтесь под нужным пользователем и не используйте sudo для mount)"
+        logging.error(msg)
+        raise SystemExit(1)
+
     mountpoint = os.path.expanduser(settings.mountpoint)
     os.makedirs(mountpoint, exist_ok=True)
+    try:
+        os.chmod(mountpoint, 0o755)
+    except OSError as e:
+        logging.warning("не удалось chmod 755 на %s: %s", mountpoint, e)
 
     db_manager = DBManager(settings.db_path)
     await db_manager.init_db()
+    yandex_root_id = await db_manager.ensure_yandex_disk_root_folder()
 
     active_clients = {}
     while not active_clients:
@@ -44,14 +59,25 @@ async def start_cloud_fusion():
 
     for cloud_type, client in active_clients.items():
         try:
-            logging.info(f"Синхронизация структуры для {cloud_type.upper()}...")
+            logging.info("Синхронизация структуры для %s...", cloud_type.upper())
             cloud_files = await client.get_all_files_flat()
-
             if cloud_files:
-                await import_cloud_to_db(db_manager, cloud_files, cloud_type=cloud_type)
-                logging.info(f"✅ {cloud_type.upper()} синхронизирован.")
+                if cloud_type == "yandex":
+                    await import_cloud_to_db(
+                        db_manager,
+                        cloud_files,
+                        cloud_type=cloud_type,
+                        path_to_id_seed={"": yandex_root_id},
+                    )
+                else:
+                    await import_cloud_to_db(
+                        db_manager,
+                        cloud_files,
+                        cloud_type=cloud_type,
+                    )
+                logging.info("%s синхронизирован.", cloud_type.upper())
         except Exception as e:
-            logging.error(f" Ошибка синхронизации {cloud_type}: {e}")
+            logging.error("Ошибка синхронизации %s: %s", cloud_type, e)
 
     vfs = CloudFusionVFS(db_manager, active_clients)
 
