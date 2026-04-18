@@ -251,3 +251,14 @@ fi
 echo "Готово. Пакет:"
 find "$RPM_TOP/RPMS" -maxdepth 3 -name 'cloudfusion-*.rpm' -print 2>/dev/null || true
 ls -la "$RPM_TOP/RPMS/x86_64/" 2>/dev/null || ls -la "$RPM_TOP/RPMS/" 2>/dev/null || true
+
+MAIN_RPM="$(find "$RPM_TOP/RPMS" -maxdepth 3 \( -name 'cloudfusion-*.rpm' ! -name '*debuginfo*' \) -type f -print 2>/dev/null | head -1)"
+if [[ -n "$MAIN_RPM" ]]; then
+  echo ""
+  echo "=== Дальше: установить RPM ==="
+  echo "Файл: $MAIN_RPM"
+  echo "У root домашний каталог — /root: НЕ используйте ~/rpmbuild от root, если собирали под другим пользователем."
+  echo "Пример:"
+  echo "  sudo rpm -Uvh \"$MAIN_RPM\""
+  echo "(опционально debuginfo: rpm -Uvh .../cloudfusion-debuginfo-....rpm)"
+fi

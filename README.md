@@ -81,9 +81,13 @@
 
 ### Уже есть готовый `.rpm`
 
+Если собирали под пользователем **`disco`**, а ставите от **root**, путь **`~/rpmbuild`** у root — это **`/root`**, файла там нет. Нужен **полный** путь, например:
+
 ```bash
-sudo rpm -Uvh cloudfusion-0.1.0-*.rpm
+sudo rpm -Uvh /home/disco/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-1.x86_64.rpm
 ```
+
+(Подставьте своего пользователя и имя файла из **`ls …/RPMS/x86_64/`**.)
 
 Пункт в меню **CloudFusion**; для OAuth в сеансе нужны **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (см. [`daemon/.env.example`](daemon/.env.example)). После установки перезапустите Dolphin для KIO — [`integration/README.md`](integration/README.md).
 

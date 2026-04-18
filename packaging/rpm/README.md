@@ -75,23 +75,45 @@ RPMBUILD_TOPDIR=/tmp/my-rpm ./build-rpm.sh
 find ~/rpmbuild/RPMS -name 'cloudfusion-*.rpm' 2>/dev/null
 ```
 
-Посмотреть, **какие файлы попадут в систему** при установке:
+Посмотреть, **какие файлы попадут в систему** при установке (только **основной** пакет, без **debuginfo**):
 
 ```bash
-rpm -qpl ~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm
+rpm -qpl "$(ls ~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm | grep -v debuginfo | head -1)"
 ```
 
 Зависимости пакета:
 
 ```bash
-rpm -qp --requires ~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm
+rpm -qp --requires "$(ls ~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm | grep -v debuginfo | head -1)"
 ```
+
+**Сообщения при сборке** вроде **`verify-elf` / `eu-elflint` / `.gnu.version`** на ALT часто бывают для бинарей Rust — если в конце есть **`Wrote: ...cloudfusion-....rpm`**, пакет всё равно нормальный; **`overlinked`** / **`Can't list ... site-packages`** при такой сборке тоже обычно не мешают.
 
 Если вместо RPM у вас только **`build/cloudfusion-*-linux-x86_64.tar.gz`** (запасной вариант при падении **`rpmbuild`**), проверьте состав:
 
 ```bash
 tar tzf build/cloudfusion-*-linux-x86_64.tar.gz | head -40
 ```
+
+### Установка: важно, **чей** `~/rpmbuild`
+
+Сборка кладёт RPM в **`$HOME/rpmbuild`** того пользователя, под которым вы запускали **`./build-rpm.sh`** (например **`/home/disco/rpmbuild`**).
+
+Если вы зашли под **root** (`su -`), то **`~/rpmbuild`** — это **`/root/rpmbuild`**, там **нет** вашего пакета → **`Файл не найден`**.
+
+**Делайте так** (подставьте своего пользователя и версию из имени файла):
+
+```bash
+sudo rpm -Uvh /home/disco/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-1.x86_64.rpm
+```
+
+Или из-под того же пользователя, который собирал:
+
+```bash
+rpm -Uvh ~/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-1.x86_64.rpm
+```
+
+Пакет **`cloudfusion-debuginfo-….rpm`** для обычного запуска **не обязателен** — ставьте только основной **`.rpm`**, если не отлаживаете краши в gdb.
 
 ### После `sudo rpm -Uvh …cloudfusion….rpm`
 
@@ -111,7 +133,12 @@ rpm -V cloudfusion
 
 ```bash
 test -x /usr/bin/cloudfusion && echo GUI_ok
-test -x /usr/libexec/cloudfusion/cloudfusion-daemon && echo daemon_ok
+```
+
+Демон на части систем ставится в **`/usr/libexec/cloudfusion/`**, на других (в т.ч. ваш ALT) — в **`/usr/lib/cloudfusion/`**. Универсально:
+
+```bash
+test -x "$(rpm -ql cloudfusion | grep -E 'cloudfusion-daemon$')" && echo daemon_ok
 test -f /usr/share/kio/servicemenus/cloudfusion-link.desktop && echo kio_ok
 ```
 
@@ -422,8 +449,16 @@ ls -la ~/rpmbuild/RPMS/x86_64/
 
 ### Шаг 8. Установка RPM
 
+Путь к файлу — **у того пользователя, который собирал** (см. раздел **«Установка: важно, чей ~/rpmbuild»** выше). От **root** используйте **полный** путь, например:
+
 ```bash
-sudo rpm -Uvh ~/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-*.rpm
+sudo rpm -Uvh /home/ВАШ_ЛОГИН/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-1.x86_64.rpm
+```
+
+Если ставите тем же пользователем, что и собирал:
+
+```bash
+rpm -Uvh ~/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-1.x86_64.rpm
 ```
 
 ```bash
@@ -448,5 +483,6 @@ kquitapp5 dolphin
 | `Файл ... cloudfusion.spec не похож на файл спецификации` | Обновите скрипт: **`./build-rpm.sh`** генерирует spec в **`~/rpmbuild/SPECS/`** сам. Вручную из git-файла: **`dos2unix`**, см. **шаг 7**. Запасной вариант: **`./build-rpm.sh --tarball`** (без **`rpmbuild`**). |
 | `rpmbuild: command not found` | Пакет **`rpm-build`** (или аналог в вашем дистрибутиве). |
 | `Group field must be present` | В spec нужна строка **`Group:`** (в репозитории: **`Graphical desktop/Other`**). Если ALT ругается на значение — подставьте группу с установленного пакета: **`rpm -qi dolphin | grep '^Group'`**. |
+| **`Файл не найден`** при **`rpm -Uvh ~/rpmbuild/...`** от **root** | У **root** домашний каталог — **`/root`**. Укажите путь к RPM пользователя-сборщика: **`/home/disco/rpmbuild/RPMS/x86_64/cloudfusion-….rpm`** или ставьте без **`su`** через **`sudo rpm -Uvh /home/…/…rpm`**. |
 
 В [`cloudfusion.spec`](cloudfusion.spec) при необходимости поправьте **`Requires:`** для FUSE под имя пакета вашего дистрибутива.
