@@ -1,14 +1,16 @@
 import asyncio
 import logging
 import os
+import webbrowser
 from contextlib import asynccontextmanager
 import httpx
 import uvicorn
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import HTMLResponse, JSONResponse
 
+from .cloud_api.auth import YandexAuthenticator
 from .api.middleware import LoggingMiddleware
 from .api.routers import auth, files, sync, system
 from .core.lru_engine import run_lru_cleanup
