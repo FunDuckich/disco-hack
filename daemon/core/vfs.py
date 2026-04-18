@@ -1,25 +1,337 @@
 import asyncio
-import os
-import stat
 import errno
+import logging
+import os
+import shutil
+import stat
+import time
+
 import pyfuse3
 import pyfuse3.asyncio
-import time
-import logging
 
 from .yandex_folder_sync import folder_sync_after_readdir
 
 log = logging.getLogger(__name__)
 
+_WRITE_FH_BASE = 1 << 30
+
+# Сетевые вызовы Яндекса: конечные таймауты, чтобы FUSE не зависал бесконечно.
+_UPLOAD_TIMEOUT = 600.0
+_UPLOAD_TIMEOUT_EMPTY = 90.0
+_REMOVE_TIMEOUT = 120.0
+_MKDIR_TIMEOUT = 120.0
+_MOVE_TIMEOUT = 180.0
+_GET_META_TIMEOUT = 60.0
+# Пуллинг роста файла при stub + read (видео качается в фоне).
+_STUB_READ_POLL_SEC = 0.05
+
+
+def _sync_read_bytes(path: str, off: int, size: int) -> bytes:
+    with open(path, "rb") as f:
+        f.seek(off)
+        return f.read(size)
+
+
+def _sync_write_bytes(path: str, off: int, buf: bytes) -> int:
+    with open(path, "r+b") as f:
+        f.seek(off)
+        f.write(buf)
+        return len(buf)
+
+
+def _sync_truncate(path: str, size: int) -> None:
+    with open(path, "r+b") as f:
+        f.truncate(size)
+
+
+def _sync_file_size(path: str) -> int:
+    return os.path.getsize(path) if os.path.isfile(path) else 0
+
+
+def _sync_release_finalize(temp: str, final: str) -> None:
+    if os.path.exists(final):
+        os.unlink(final)
+    shutil.move(temp, final)
+
+
+def _remote_child(parent_remote: str | None, name: str) -> str:
+    pr = parent_remote if parent_remote is not None else "disk:/"
+    p = pr.rstrip("/")
+    if p == "disk:":
+        return f"disk:/{name}"
+    return f"{p}/{name}"
+
+
+def _yandex_remote_basename_from_dolphin_name(name_s: str) -> str:
+    """Dolphin/KDE при сохранении создаёт файл с суффиксом .part; в облаке нужен финальный путь без .part."""
+    if len(name_s) > 5 and name_s.endswith(".part"):
+        return name_s[:-5]
+    return name_s
+
+
+def _yandex_revision(meta) -> str:
+    r = getattr(meta, "revision", None)
+    return str(r) if r is not None else ""
+
+
+def _invalidate_inode_async(inode: int) -> None:
+    try:
+        asyncio.get_running_loop().create_task(
+            asyncio.to_thread(pyfuse3.invalidate_inode, inode, False)
+        )
+    except RuntimeError:
+        pass
+
 
 class CloudFusionVFS(pyfuse3.Operations):
-    def __init__(self, db_manager, cloud_api):
+    def __init__(self, db_manager, active_clients: dict):
         super().__init__()
         self.db_manager = db_manager
-        self.cloud_api = cloud_api
+        self.active_clients = active_clients
         self.inode_2_dbid = {pyfuse3.ROOT_INODE: None}
         self.dbid_2_inode = {None: pyfuse3.ROOT_INODE}
         self.next_inode = pyfuse3.ROOT_INODE + 1
+        self._next_write_fh = _WRITE_FH_BASE
+        self._write_handles: dict[int, dict] = {}
+        self._stub_fetch_locks: dict[int, asyncio.Lock] = {}
+        # Загрузка после close() не должна блокировать FUSE: фон + await при rename/unlink/open(WR).
+        self._pending_finalize_uploads: dict[int, asyncio.Task] = {}
+        # Stub: один фоновый download на db_id; read ждёт только нужный объём байт (не весь файл сразу).
+        self._stub_download_tasks: dict[int, asyncio.Task] = {}
+
+    def _stub_lock(self, db_id: int) -> asyncio.Lock:
+        if db_id not in self._stub_fetch_locks:
+            self._stub_fetch_locks[db_id] = asyncio.Lock()
+        return self._stub_fetch_locks[db_id]
+
+    async def _await_pending_finalize(self, db_id: int) -> None:
+        t = self._pending_finalize_uploads.get(db_id)
+        if not t:
+            return
+        await t
+        exc = t.exception()
+        if exc is not None:
+            log.warning(
+                "FUSE: фоновая загрузка db_id=%s завершилась с ошибкой: %s",
+                db_id,
+                exc,
+            )
+            raise pyfuse3.FUSEError(errno.EIO) from exc
+
+    async def _cancel_pending_finalize(self, db_id: int) -> None:
+        """Отмена фоновой загрузки (например перед unlink); не трогаем строку БД."""
+        t = self._pending_finalize_uploads.pop(db_id, None)
+        if not t:
+            return
+        if not t.done():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        else:
+            exc = t.exception()
+            if exc is not None:
+                log.debug(
+                    "FUSE: finalize db_id=%s уже завершилась с ошибкой до cancel: %s",
+                    db_id,
+                    exc,
+                )
+
+    async def _background_remove_remote(self, remote_path: str) -> None:
+        """Удаление на стороне Яндекса не блокирует FUSE."""
+        try:
+            await asyncio.wait_for(
+                self._yandex_client().remove_remote(remote_path),
+                timeout=_REMOVE_TIMEOUT,
+            )
+            log.debug("[FUSE bg] remove_remote ok %s", remote_path)
+        except asyncio.TimeoutError:
+            log.error("[FUSE bg] remove_remote timeout %s", remote_path)
+        except Exception:
+            log.exception("[FUSE bg] remove_remote %s", remote_path)
+
+    async def _finalize_upload_worker(self, h: dict) -> None:
+        db_id = h["db_id"]
+        temp = h["temp"]
+        try:
+            sz = await asyncio.to_thread(_sync_file_size, temp)
+            yc = self._yandex_client()
+            upload_timeout = _UPLOAD_TIMEOUT_EMPTY if sz == 0 else _UPLOAD_TIMEOUT
+            await asyncio.wait_for(
+                yc.upload_local_file(temp, h["remote"]),
+                timeout=upload_timeout,
+            )
+            meta = await asyncio.wait_for(
+                yc.get_meta(h["remote"]),
+                timeout=_GET_META_TIMEOUT,
+            )
+            rev = _yandex_revision(meta)
+            cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+            await asyncio.to_thread(os.makedirs, cache_dir, 0o755, True)
+            row = await self.db_manager.get_file_by_id(db_id)
+            base_name = row["name"] if row else os.path.basename(h["remote"])
+            final = os.path.join(cache_dir, f"{db_id}_{base_name}")
+            await asyncio.to_thread(_sync_release_finalize, temp, final)
+            await self.db_manager.update_yandex_entry_meta(
+                db_id,
+                size=sz,
+                etag=rev,
+                status="cached",
+                local_path=final,
+            )
+        except asyncio.CancelledError:
+            log.info("FUSE async finalize upload отменён db_id=%s", db_id)
+            if await asyncio.to_thread(os.path.isfile, temp):
+                try:
+                    await asyncio.to_thread(os.unlink, temp)
+                except OSError:
+                    pass
+            raise
+        except Exception:
+            log.exception("FUSE async finalize upload db_id=%s", db_id)
+            if h.get("created"):
+                try:
+                    await self.db_manager.delete_file_row_yandex(db_id)
+                except Exception:
+                    log.exception("FUSE rollback db")
+            if await asyncio.to_thread(os.path.isfile, temp):
+                try:
+                    await asyncio.to_thread(os.unlink, temp)
+                except OSError:
+                    pass
+            raise
+        finally:
+            cur = asyncio.current_task()
+            if self._pending_finalize_uploads.get(db_id) is cur:
+                self._pending_finalize_uploads.pop(db_id, None)
+
+    @staticmethod
+    def _stub_cache_path(db_id: int, name: str) -> str:
+        cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+        return os.path.join(cache_dir, f"{db_id}_{name}")
+
+    async def _stub_start_or_join_download(self, db_id: int) -> None:
+        async with self._stub_lock(db_id):
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row or row.get("is_dir") or row.get("status") != "stub":
+                return
+            t = self._stub_download_tasks.get(db_id)
+            if t is not None and not t.done():
+                return
+            self._stub_download_tasks[db_id] = asyncio.create_task(
+                self._stub_download_worker(db_id)
+            )
+
+    async def _stub_download_worker(self, db_id: int) -> None:
+        try:
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row or row.get("is_dir") or row.get("status") != "stub":
+                return
+            cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+            await asyncio.to_thread(os.makedirs, cache_dir, 0o755, True)
+            local_path = self._stub_cache_path(db_id, row["name"])
+            target = self._client_for_cloud_type(row.get("cloud_type"))
+            if not target:
+                raise RuntimeError("no cloud client")
+            log.info("FUSE: загрузка в кэш (фон) %s...", row["name"])
+            await target.download(row["remote_path"], local_path)
+            await self.db_manager.update_downloaded_file(db_id, local_path)
+        except Exception:
+            log.exception("FUSE stub download db_id=%s", db_id)
+            raise
+        finally:
+            cur = asyncio.current_task()
+            existing = self._stub_download_tasks.get(db_id)
+            if existing is cur:
+                self._stub_download_tasks.pop(db_id, None)
+
+    async def _stub_wait_readable(
+        self,
+        db_id: int,
+        local_path: str,
+        off: int,
+        size: int,
+        total_hint: int,
+    ) -> None:
+        """Ждём, пока на диске не будет байт для read(off, size) — без окончания полного скачивания."""
+        if size <= 0:
+            return
+        if total_hint > 0 and off >= total_hint:
+            return
+        want_end = off + size
+        if total_hint > 0:
+            want_end = min(want_end, total_hint)
+        while True:
+            row = await self.db_manager.get_file_by_id(db_id)
+            if row.get("status") == "cached":
+                return
+            clen = 0
+            if await asyncio.to_thread(os.path.isfile, local_path):
+                clen = await asyncio.to_thread(_sync_file_size, local_path)
+            if clen >= want_end:
+                return
+            t = self._stub_download_tasks.get(db_id)
+            if t is not None and t.done():
+                exc = t.exception()
+                if exc is not None:
+                    raise pyfuse3.FUSEError(errno.EIO) from exc
+                if clen > off or (total_hint > 0 and off >= total_hint):
+                    return
+                if await asyncio.to_thread(os.path.isfile, local_path):
+                    clen2 = await asyncio.to_thread(_sync_file_size, local_path)
+                    if clen2 > off or clen2 >= want_end:
+                        return
+                raise pyfuse3.FUSEError(errno.EIO)
+            await asyncio.sleep(_STUB_READ_POLL_SEC)
+
+    async def _stub_await_fully_cached(self, db_id: int) -> None:
+        """Для open(WR) по stub — нужен полный локальный файл."""
+        await self._stub_start_or_join_download(db_id)
+        t = self._stub_download_tasks.get(db_id)
+        if t:
+            await t
+            exc = t.exception()
+            if exc is not None:
+                raise pyfuse3.FUSEError(errno.EIO) from exc
+        row = await self.db_manager.get_file_by_id(db_id)
+        if row.get("status") != "cached":
+            raise pyfuse3.FUSEError(errno.EIO)
+
+    async def _cancel_stub_download(self, db_id: int) -> None:
+        row = await self.db_manager.get_file_by_id(db_id)
+        partial = None
+        if row and not row.get("is_dir") and row.get("status") == "stub":
+            partial = self._stub_cache_path(db_id, row["name"])
+        t = self._stub_download_tasks.pop(db_id, None)
+        if t and not t.done():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.exception("FUSE cancel stub download db_id=%s", db_id)
+        if partial and await asyncio.to_thread(os.path.isfile, partial):
+            try:
+                await asyncio.to_thread(os.unlink, partial)
+            except OSError:
+                pass
+
+    def _client_for_cloud_type(self, cloud_type: str | None):
+        if not cloud_type:
+            return None
+        return self.active_clients.get(cloud_type)
+
+    def _yandex_client(self):
+        y = self.active_clients.get("yandex")
+        if not y:
+            raise pyfuse3.FUSEError(errno.EROFS)
+        return y
+
+    def _alloc_write_fh(self) -> int:
+        self._next_write_fh += 1
+        return self._next_write_fh
 
     def _get_inode(self, db_id: int) -> int:
         if db_id not in self.dbid_2_inode:
@@ -41,25 +353,77 @@ class CloudFusionVFS(pyfuse3.Operations):
         entry.st_ino = inode
 
         if db_id is None:
-            entry.st_mode = (stat.S_IFDIR | 0o755)
+            entry.st_mode = stat.S_IFDIR | 0o755
             entry.st_size = 0
+            entry.st_nlink = 2
+            entry.st_blksize = 4096
+            entry.st_blocks = 0
             return entry
 
         row = await self.db_manager.get_file_by_id(db_id)
         if not row:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
-        if row['is_dir']:
-            entry.st_mode = (stat.S_IFDIR | 0o755)
+        if row["is_dir"]:
+            entry.st_mode = stat.S_IFDIR | 0o755
             entry.st_size = 0
+            entry.st_nlink = 2
+            entry.st_blksize = 4096
+            entry.st_blocks = 0
         else:
-            entry.st_mode = (stat.S_IFREG | 0o644)
-            entry.st_size = row['size']
+            entry.st_mode = stat.S_IFREG | 0o644
+            entry.st_nlink = 1
+            entry.st_blksize = 4096
+            lp = row.get("local_path")
+
+            def _attr_size_for_file(local_p, row_size):
+                if local_p and os.path.isfile(local_p):
+                    return os.path.getsize(local_p)
+                return row_size
+
+            entry.st_size = await asyncio.to_thread(
+                _attr_size_for_file, lp, row["size"]
+            )
+            sz = int(entry.st_size)
+            entry.st_blocks = (sz + 511) // 512 if sz else 0
 
         return entry
 
+    async def access(self, inode, mode, ctx):
+        return True
+
+    async def statfs(self, ctx):
+        s = pyfuse3.StatvfsData()
+        s.f_bsize = 4096
+        s.f_frsize = 4096
+        s.f_blocks = 1 << 20
+        s.f_bfree = 1 << 19
+        s.f_bavail = 1 << 19
+        s.f_files = 1 << 18
+        s.f_ffree = 1 << 17
+        s.f_favail = 1 << 17
+        s.f_namemax = 255
+        return s
+
     async def lookup(self, parent_inode, name, ctx=None):
-        name_str = name.decode('utf-8')
+        name_str = name.decode("utf-8")
+        if name_str == ".":
+            return await self.getattr(parent_inode)
+        if name_str == "..":
+            if parent_inode == pyfuse3.ROOT_INODE:
+                return await self.getattr(pyfuse3.ROOT_INODE)
+            parent_id = self.inode_2_dbid.get(parent_inode)
+            if parent_id is None:
+                return await self.getattr(pyfuse3.ROOT_INODE)
+            row = await self.db_manager.get_file_by_id(parent_id)
+            if not row:
+                raise pyfuse3.FUSEError(errno.ENOENT)
+            gp = row["parent_id"]
+            if gp is None:
+                return await self.getattr(pyfuse3.ROOT_INODE)
+            ginode = self._get_inode(gp)
+            return await self.getattr(ginode)
+
         parent_id = self.inode_2_dbid.get(parent_inode)
 
         db_id = await self.db_manager.lookup_file(parent_id, name_str)
@@ -75,29 +439,50 @@ class CloudFusionVFS(pyfuse3.Operations):
 
     async def readdir(self, inode, off, token):
         parent_db_id = self.inode_2_dbid.get(inode)
-        log.info(f"FUSE: Чтение директории inode={inode} (DB_ID={parent_db_id})")
+        log.debug("FUSE readdir inode=%s parent_db_id=%s", inode, parent_db_id)
 
         entries = await self.db_manager.get_readdir_entries(parent_db_id)
-        log.info(f"FUSE: Найдено {len(entries)} элементов в БД")
 
+        stamp = int(time.time() * 1e9)
         for i, row in enumerate(entries[off:], start=off):
-            child_inode = self._get_inode(row['id'])
+            child_inode = self._get_inode(row["id"])
             attr = pyfuse3.EntryAttributes()
             attr.st_ino = child_inode
-            attr.st_mode = (stat.S_IFDIR | 0o755) if row['is_dir'] else (stat.S_IFREG | 0o644)
+            attr.st_mode = (stat.S_IFDIR | 0o755) if row["is_dir"] else (stat.S_IFREG | 0o644)
+            attr.st_uid = os.getuid()
+            attr.st_gid = os.getgid()
+            attr.st_atime_ns = stamp
+            attr.st_mtime_ns = stamp
+            attr.st_ctime_ns = stamp
+            if row["is_dir"]:
+                attr.st_nlink = 2
+                attr.st_size = 0
+                attr.st_blksize = 4096
+                attr.st_blocks = 0
+            else:
+                attr.st_nlink = 1
+                sz = int(row.get("size") or 0)
+                attr.st_size = sz
+                attr.st_blksize = 4096
+                attr.st_blocks = (sz + 511) // 512 if sz else 0
 
-            if not pyfuse3.readdir_reply(token, row['name'].encode('utf-8'), attr, i + 1):
+            if not pyfuse3.readdir_reply(token, row["name"].encode("utf-8"), attr, i + 1):
                 break
 
         try:
-            asyncio.get_running_loop().create_task(
-                folder_sync_after_readdir(
-                    self.db_manager,
-                    self.cloud_api,
-                    inode,
-                    parent_db_id,
+            prow = None
+            if parent_db_id is not None:
+                prow = await self.db_manager.get_file_by_id(parent_db_id)
+            yandex = self.active_clients.get("yandex")
+            if yandex and prow and prow.get("cloud_type") == "yandex":
+                asyncio.get_running_loop().create_task(
+                    folder_sync_after_readdir(
+                        self.db_manager,
+                        yandex,
+                        inode,
+                        parent_db_id,
+                    )
                 )
-            )
         except RuntimeError:
             log.warning("[sync] нет активного event loop — фоновая синхронизация пропущена")
 
@@ -106,39 +491,398 @@ class CloudFusionVFS(pyfuse3.Operations):
         row = await self.db_manager.get_file_by_id(db_id)
         if not row:
             raise pyfuse3.FUSEError(errno.ENOENT)
+        if row["is_dir"]:
+            raise pyfuse3.FUSEError(errno.EISDIR)
 
-        if row['status'] == 'stub':
-            log.info(f"FUSE: Ленивая загрузка файла {row['name']}...")
-            cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
-            os.makedirs(cache_dir, exist_ok=True)
-            local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
+        accmode = flags & os.O_ACCMODE
+        if accmode == os.O_RDONLY:
+            if row.get("status") == "stub":
+                asyncio.create_task(self._stub_start_or_join_download(db_id))
+            return pyfuse3.FileInfo(fh=inode)
 
-            cloud_type = row['cloud_type']
-            target_client = self.active_clients.get(cloud_type)
+        if accmode in (os.O_WRONLY, os.O_RDWR):
+            if row.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
+            await self._await_pending_finalize(db_id)
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row:
+                raise pyfuse3.FUSEError(errno.ENOENT)
+            upload_dir = os.path.expanduser("~/.cache/cloud-fusion/uploads/")
+            os.makedirs(upload_dir, exist_ok=True)
+            temp = os.path.join(upload_dir, f"w-{db_id}-{os.getpid()}.part")
 
-            if not target_client:
+            if flags & os.O_TRUNC:
+                open(temp, "wb").close()
+            elif row.get("local_path") and os.path.isfile(row["local_path"]):
+                await asyncio.to_thread(shutil.copy2, row["local_path"], temp)
+            elif row["status"] == "stub":
+                await self._stub_await_fully_cached(db_id)
+                row = await self.db_manager.get_file_by_id(db_id)
+                lp = row.get("local_path")
+                if not lp or not await asyncio.to_thread(os.path.isfile, lp):
+                    raise pyfuse3.FUSEError(errno.EIO)
+                await asyncio.to_thread(shutil.copy2, lp, temp)
+            else:
+                open(temp, "wb").close()
+
+            fh = self._alloc_write_fh()
+            self._write_handles[fh] = {
+                "inode": inode,
+                "db_id": db_id,
+                "temp": temp,
+                "remote": row["remote_path"],
+                "created": False,
+                "dirty": bool(flags & os.O_TRUNC),
+            }
+            return pyfuse3.FileInfo(fh=fh)
+
+        raise pyfuse3.FUSEError(errno.EINVAL)
+
+    async def create(self, parent_inode, name, mode, flags, ctx):
+        name_s = name.decode("utf-8")
+        parent_id = self.inode_2_dbid.get(parent_inode)
+        if parent_id is not None:
+            prow = await self.db_manager.get_file_by_id(parent_id)
+            if not prow or not prow["is_dir"]:
+                raise pyfuse3.FUSEError(errno.ENOENT)
+            if prow.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
+            rp_parent = prow["remote_path"]
+        else:
+            raise pyfuse3.FUSEError(errno.EPERM)
+
+        if await self.db_manager.lookup_file(parent_id, name_s):
+            raise pyfuse3.FUSEError(errno.EEXIST)
+
+        remote = _remote_child(
+            rp_parent, _yandex_remote_basename_from_dolphin_name(name_s)
+        )
+        upload_dir = os.path.expanduser("~/.cache/cloud-fusion/uploads/")
+        os.makedirs(upload_dir, exist_ok=True)
+
+        rid = await self.db_manager.insert_yandex_child(
+            parent_id=parent_id,
+            name=name_s,
+            is_dir=False,
+            remote_path=remote,
+            size=0,
+            status="uploading",
+            etag="",
+            local_path=None,
+        )
+        temp = os.path.join(upload_dir, f"new-{rid}.part")
+        open(temp, "wb").close()
+        await self.db_manager.update_yandex_entry_meta(rid, local_path=temp)
+
+        inode = self._get_inode(rid)
+        fh = self._alloc_write_fh()
+        self._write_handles[fh] = {
+            "inode": inode,
+            "db_id": rid,
+            "temp": temp,
+            "remote": remote,
+            "created": True,
+            "dirty": True,
+        }
+        fi = pyfuse3.FileInfo(fh=fh)
+        attr = await self.getattr(inode)
+        return fi, attr
+
+    async def read(self, fh, off, size):
+        h = self._write_handles.get(fh)
+        if h:
+            temp = h["temp"]
+            if not os.path.isfile(temp):
                 raise pyfuse3.FUSEError(errno.EIO)
+            try:
+                return await asyncio.to_thread(_sync_read_bytes, temp, off, size)
+            except OSError as e:
+                log.error("FUSE read temp: %s", e)
+                raise pyfuse3.FUSEError(errno.EIO) from e
 
-            await target_client.download(row['remote_path'], local_path)
-
-            await self.db_manager.update_downloaded_file(db_id, local_path)
-
-            log.info(f"FUSE: Файл {row['name']} скачан в кэш!")
-
-        return pyfuse3.FileInfo(fh=inode)
-
-    async def read(self, inode, off, size):
+        inode = fh
         db_id = self.inode_2_dbid.get(inode)
         row = await self.db_manager.get_file_by_id(db_id)
 
-        local_path = row['local_path']
-        if not local_path or not os.path.exists(local_path):
+        if row.get("status") == "stub":
+            cache_lp = self._stub_cache_path(db_id, row["name"])
+            await self._stub_start_or_join_download(db_id)
+            total_hint = int(row.get("size") or 0)
+            await self._stub_wait_readable(db_id, cache_lp, off, size, total_hint)
+            row = await self.db_manager.get_file_by_id(db_id)
+
+        local_path = row.get("local_path")
+        if row.get("status") == "stub" and (
+            not local_path or not await asyncio.to_thread(os.path.exists, local_path)
+        ):
+            local_path = self._stub_cache_path(db_id, row["name"])
+        if not local_path or not await asyncio.to_thread(os.path.exists, local_path):
             raise pyfuse3.FUSEError(errno.EIO)
 
         try:
-            with open(local_path, 'rb') as f:
-                f.seek(off)
-                return f.read(size)
-        except Exception as e:
-            log.error(f"FUSE Read Error: {e}")
-            raise pyfuse3.FUSEError(errno.EIO)
+            return await asyncio.to_thread(_sync_read_bytes, local_path, off, size)
+        except OSError as e:
+            log.error("FUSE read: %s", e)
+            raise pyfuse3.FUSEError(errno.EIO) from e
+
+    async def write(self, fh, off, buf):
+        h = self._write_handles.get(fh)
+        if not h:
+            raise pyfuse3.FUSEError(errno.EBADF)
+        try:
+            n = await asyncio.to_thread(_sync_write_bytes, h["temp"], off, buf)
+            h["dirty"] = True
+        except OSError as e:
+            log.error("FUSE write: %s", e)
+            raise pyfuse3.FUSEError(errno.EIO) from e
+        return n
+
+    async def release(self, fh):
+        h = self._write_handles.pop(fh, None)
+        if not h:
+            return
+        temp = h["temp"]
+        try:
+            if h.get("dirty") or h.get("created"):
+                prev = self._pending_finalize_uploads.get(h["db_id"])
+                if prev is not None and not prev.done():
+                    log.warning(
+                        "FUSE release: предыдущая загрузка db_id=%s ещё идёт — ждём",
+                        h["db_id"],
+                    )
+                    await prev
+                    exc = prev.exception()
+                    if exc is not None:
+                        raise exc
+                task = asyncio.create_task(self._finalize_upload_worker(h))
+                self._pending_finalize_uploads[h["db_id"]] = task
+
+                def _consume_finalize_task_exc(t: asyncio.Task) -> None:
+                    if t.cancelled():
+                        return
+                    t.exception()
+
+                task.add_done_callback(_consume_finalize_task_exc)
+                log.info(
+                    "FUSE release: загрузка в фоне на %s (db_id=%s)",
+                    h["remote"],
+                    h["db_id"],
+                )
+            elif await asyncio.to_thread(os.path.isfile, temp):
+                await asyncio.to_thread(os.unlink, temp)
+        except Exception:
+            log.exception("FUSE release / upload")
+            if h.get("created"):
+                try:
+                    await self.db_manager.delete_file_row_yandex(h["db_id"])
+                except Exception:
+                    log.exception("FUSE rollback db")
+            if await asyncio.to_thread(os.path.isfile, temp):
+                try:
+                    await asyncio.to_thread(os.unlink, temp)
+                except OSError:
+                    pass
+
+    async def flush(self, fh):
+        h = self._write_handles.get(fh)
+        if not h:
+            return
+        try:
+
+            def _touch():
+                with open(h["temp"], "r+b"):
+                    pass
+
+            await asyncio.to_thread(_touch)
+        except OSError:
+            pass
+
+    async def setattr(self, inode, attr, fields, fh, ctx):
+        if fields.update_size:
+            size = int(attr.st_size)
+            if fh is not None:
+                h = self._write_handles.get(fh)
+                if h:
+                    await asyncio.to_thread(_sync_truncate, h["temp"], size)
+                    h["dirty"] = True
+                    return await self.getattr(h["inode"])
+            db_id = self.inode_2_dbid.get(inode)
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row or row["is_dir"]:
+                raise pyfuse3.FUSEError(errno.EINVAL)
+            if row.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
+            lp = row.get("local_path")
+            if lp and os.path.isfile(lp):
+                await asyncio.to_thread(_sync_truncate, lp, size)
+                await self.db_manager.update_yandex_entry_meta(db_id, size=size)
+            else:
+                raise pyfuse3.FUSEError(errno.EINVAL)
+            return await self.getattr(inode)
+        return await self.getattr(inode)
+
+    async def mkdir(self, parent_inode, name, mode, ctx):
+        name_s = name.decode("utf-8")
+        parent_id = self.inode_2_dbid.get(parent_inode)
+        if parent_id is not None:
+            prow = await self.db_manager.get_file_by_id(parent_id)
+            if not prow or not prow["is_dir"]:
+                raise pyfuse3.FUSEError(errno.ENOENT)
+            if prow.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
+            rp_parent = prow["remote_path"]
+        else:
+            raise pyfuse3.FUSEError(errno.EPERM)
+
+        if await self.db_manager.lookup_file(parent_id, name_s):
+            raise pyfuse3.FUSEError(errno.EEXIST)
+
+        remote = _remote_child(rp_parent, name_s)
+        yc = self._yandex_client()
+        await asyncio.wait_for(yc.mkdir_remote(remote), timeout=_MKDIR_TIMEOUT)
+        meta = await asyncio.wait_for(yc.get_meta(remote), timeout=_GET_META_TIMEOUT)
+        rev = _yandex_revision(meta)
+
+        rid = await self.db_manager.insert_yandex_child(
+            parent_id=parent_id,
+            name=name_s,
+            is_dir=True,
+            remote_path=remote,
+            size=0,
+            status="stub",
+            etag=rev,
+            local_path=None,
+        )
+        inode = self._get_inode(rid)
+        _invalidate_inode_async(parent_inode)
+        return await self.getattr(inode)
+
+    async def unlink(self, parent_inode, name, ctx):
+        name_s = name.decode("utf-8")
+        parent_id = self.inode_2_dbid.get(parent_inode)
+        fid = await self.db_manager.lookup_file(parent_id, name_s)
+        if not fid:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+        row = await self.db_manager.get_file_by_id(fid)
+        if row["is_dir"]:
+            raise pyfuse3.FUSEError(errno.EISDIR)
+        if row.get("cloud_type") != "yandex":
+            raise pyfuse3.FUSEError(errno.EROFS)
+        remote_path = row["remote_path"]
+        await self._cancel_stub_download(fid)
+        await self._cancel_pending_finalize(fid)
+        row = await self.db_manager.get_file_by_id(fid)
+        if not row:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+        lp = row.get("local_path")
+        if lp and await asyncio.to_thread(os.path.isfile, lp):
+            try:
+                await asyncio.to_thread(os.unlink, lp)
+            except OSError:
+                pass
+        await self.db_manager.delete_file_row_yandex(fid)
+        _invalidate_inode_async(parent_inode)
+        asyncio.create_task(self._background_remove_remote(remote_path))
+
+    async def rmdir(self, parent_inode, name, ctx):
+        name_s = name.decode("utf-8")
+        parent_id = self.inode_2_dbid.get(parent_inode)
+        fid = await self.db_manager.lookup_file(parent_id, name_s)
+        if not fid:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+        row = await self.db_manager.get_file_by_id(fid)
+        if not row["is_dir"]:
+            raise pyfuse3.FUSEError(errno.ENOTDIR)
+        kids = await self.db_manager.get_readdir_entries(fid)
+        if kids:
+            raise pyfuse3.FUSEError(errno.ENOTEMPTY)
+        if row.get("cloud_type") != "yandex":
+            raise pyfuse3.FUSEError(errno.EROFS)
+        remote_path = row["remote_path"]
+        await self.db_manager.delete_file_row_yandex(fid)
+        _invalidate_inode_async(parent_inode)
+        asyncio.create_task(self._background_remove_remote(remote_path))
+
+    async def rename(self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx):
+        if flags & pyfuse3.RENAME_EXCHANGE:
+            raise pyfuse3.FUSEError(errno.EINVAL)
+
+        name_old_s = name_old.decode("utf-8")
+        name_new_s = name_new.decode("utf-8")
+        pid_old = self.inode_2_dbid.get(parent_inode_old)
+        pid_new = self.inode_2_dbid.get(parent_inode_new)
+
+        old_id = await self.db_manager.lookup_file(pid_old, name_old_s)
+        if not old_id:
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        exist_new = await self.db_manager.lookup_file(pid_new, name_new_s)
+        if exist_new and (flags & pyfuse3.RENAME_NOREPLACE):
+            raise pyfuse3.FUSEError(errno.EEXIST)
+
+        if pid_new is not None:
+            pnew = await self.db_manager.get_file_by_id(pid_new)
+            if not pnew or not pnew["is_dir"]:
+                raise pyfuse3.FUSEError(errno.ENOENT)
+            if pnew.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EXDEV)
+            rp_new_parent = pnew["remote_path"]
+        else:
+            raise pyfuse3.FUSEError(errno.EXDEV)
+
+        old_row = await self.db_manager.get_file_by_id(old_id)
+        old_remote = old_row["remote_path"]
+        if old_row.get("cloud_type") != "yandex":
+            raise pyfuse3.FUSEError(errno.EXDEV)
+
+        await self._await_pending_finalize(old_id)
+
+        new_remote = _remote_child(
+            rp_new_parent,
+            _yandex_remote_basename_from_dolphin_name(name_new_s),
+        )
+
+        if exist_new:
+            await self._await_pending_finalize(exist_new)
+            ex_row = await self.db_manager.get_file_by_id(exist_new)
+            if ex_row and ex_row.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EXDEV)
+            await self.db_manager.delete_subtree(exist_new)
+
+        if old_remote != new_remote:
+            try:
+                await asyncio.wait_for(
+                    self._yandex_client().move_remote(
+                        old_remote, new_remote, overwrite=True
+                    ),
+                    timeout=_MOVE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                log.error(
+                    "FUSE rename: move_remote timeout %s -> %s",
+                    old_remote,
+                    new_remote,
+                )
+                raise pyfuse3.FUSEError(errno.ETIMEDOUT) from None
+
+        if old_row["is_dir"]:
+            await self.db_manager.update_yandex_entry_meta(
+                old_id,
+                parent_id=pid_new,
+                name=name_new_s,
+                remote_path=new_remote,
+            )
+            await self.db_manager.yandex_update_descendant_remotes_after_dir_move(
+                old_id, old_remote, new_remote
+            )
+        else:
+            await self.db_manager.update_yandex_entry_meta(
+                old_id,
+                parent_id=pid_new,
+                name=name_new_s,
+                remote_path=new_remote,
+            )
+
+        _invalidate_inode_async(parent_inode_old)
+        if parent_inode_new != parent_inode_old:
+            _invalidate_inode_async(parent_inode_new)
