@@ -434,6 +434,52 @@ class DBManager:
         await db.execute("UPDATE files SET status = ? WHERE id = ?", (status, file_id))
         await db.commit()
 
+    async def evict_file(self, file_id: int) -> bool:
+        """Remove local cache copy and flip status to stub. Returns True if file was cached."""
+        row = await self.get_file_by_id(file_id)
+        if row is None or row["status"] != "cached":
+            return False
+        local_path = row.get("local_path")
+        if local_path and os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+            except OSError as e:
+                logging.warning("evict_file: could not remove %s: %s", local_path, e)
+        db = await self.get_db()
+        await db.execute(
+            "UPDATE files SET status = 'stub', local_path = NULL WHERE id = ?",
+            (file_id,),
+        )
+        await db.commit()
+        return True
+
+    async def get_file_by_remote_path(self, cloud_type: str, remote_path: str):
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM files WHERE cloud_type = ? AND remote_path = ?",
+            (cloud_type, remote_path),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def locate_by_path_components(self, components: list[str]):
+        """Walk the DB tree by path components starting from root (parent_id IS NULL)."""
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        parent_id = None
+        row = None
+        for name in components:
+            cur = await db.execute(
+                "SELECT * FROM files WHERE name = ? AND parent_id IS ?",
+                (name, parent_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            parent_id = row["id"]
+        return dict(row) if row else None
+
     async def get_stats(self):
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
