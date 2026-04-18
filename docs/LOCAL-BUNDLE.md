@@ -61,7 +61,9 @@ env LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 \
 
 - Устанавливать нужно пакет **`nc-py-api`** (через дефис в pip), в коде импорт **`nc_py_api`** (подчёркивание). Опечатка **`nc-oy-api`** в pip не существует.
 - Системный `pip install nc-py-api` под root **не подмешивает** модули внутрь уже собранного бинаря: демон собирается из **venv в корне репо** (`.venv-build-daemon`). После правок в `requirements.txt` пересоберите: `./scripts/build-linux-daemon.sh` или полный `./scripts/build-local-bundle.sh`.
-- Скрипт **`scripts/build-linux-daemon.sh`** явно ставит и `daemon/requirements-build.txt`, и **`daemon/requirements.txt`**, чтобы в venv гарантированно был `nc_py_api` для анализа PyInstaller.
+- Скрипт **`scripts/build-linux-daemon.sh`** каждый раз **пересоздаёт** `.venv-build-daemon` и вызывает только **`"$VENV/bin/python" -m pip`** и **`"$VENV/bin/python" -m PyInstaller`**, чтобы pip **не уходил в `~/.local`** (сообщение *Defaulting to user installation because normal site-packages is not writeable* означает, что зависимости **не в venv** — тогда `pyinstaller` не появляется в `PATH` и onefile собирается без `nc_py_api`).
+- Перед сборкой скрипт делает **`import nc_py_api`** из venv; если строка не печатается — чините права на каталог репозитория / место venv (нельзя `noexec`, нужна запись).
+- В spec подключён hook **`daemon/pyinstaller/hooks/hook-nc_py_api.py`** (`collect_all("nc_py_api")`) для полного включения зависимостей Nextcloud-клиента.
 
 Конфиг демона: **`~/.config/cloudfusion/.env`** (см. `daemon/.env.example`) или экспорт в сеансе. Собранный **`cloudfusion-daemon`** без **`YANDEX_*`** сам поднимется в **mock**-режиме (сообщение в stderr); из исходников **`python -m daemon`** без ключей по-прежнему нужен **`CLOUDFUSION_MOCK_YANDEX=1`** или `.env`.
 

@@ -81,13 +81,16 @@ if importlib.util.find_spec("nc_py_api") is None:
         "(см. scripts/build-linux-daemon.sh)."
     )
 
+# Локальные hooks (hook-nc_py_api.py — collect_all для Nextcloud-клиента).
+_hooks_dir = str(SPECDIR / "hooks")
+
 a = Analysis(
     [str(ROOT / "daemon" / "pyinstaller" / "entry.py")],
     pathex=[str(ROOT)],
     binaries=extra_binaries,
     datas=extra_datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],
+    hiddenimports=list(dict.fromkeys(hiddenimports)),
+    hookspath=[_hooks_dir],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
