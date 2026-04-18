@@ -54,7 +54,19 @@ async def start_cloud_fusion():
         raise SystemExit(1)
 
     mountpoint = os.path.expanduser(settings.mountpoint)
-    os.makedirs(mountpoint, exist_ok=True)
+    try:
+        os.makedirs(mountpoint, exist_ok=True)
+    except FileExistsError:
+        # Stale FUSE mount from a previous run: the path exists but isdir()
+        # returns False through the hung mount, so exist_ok doesn't suppress.
+        import subprocess
+        for cmd in (["fusermount3", "-u", mountpoint], ["fusermount", "-u", mountpoint]):
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5)
+                break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+        os.makedirs(mountpoint, exist_ok=True)
     try:
         os.chmod(mountpoint, 0o755)
     except OSError as e:
