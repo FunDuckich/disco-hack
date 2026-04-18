@@ -13,7 +13,8 @@ from ..database.manager import DBManager
 log = logging.getLogger(__name__)
 
 CONFIG_ROOT_REVISION = "yandex_disk_root_folder_revision"
-_DEBOUNCE_SEC = 1.5
+# Короче — после F5 Dolphin быстрее увидит новые файлы с другого клиента.
+_DEBOUNCE_SEC = 0.35
 
 _last_sync_monotonic: dict[str, float] = {}
 _sync_locks: dict[str, asyncio.Lock] = {}
