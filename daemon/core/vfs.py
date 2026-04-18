@@ -518,9 +518,15 @@ class CloudFusionVFS(pyfuse3.Operations):
                     exc = prev.exception()
                     if exc is not None:
                         raise exc
-                self._pending_finalize_uploads[h["db_id"]] = asyncio.create_task(
-                    self._finalize_upload_worker(h)
-                )
+                task = asyncio.create_task(self._finalize_upload_worker(h))
+                self._pending_finalize_uploads[h["db_id"]] = task
+
+                def _consume_finalize_task_exc(t: asyncio.Task) -> None:
+                    if t.cancelled():
+                        return
+                    t.exception()
+
+                task.add_done_callback(_consume_finalize_task_exc)
                 log.info(
                     "FUSE release: загрузка в фоне на %s (db_id=%s)",
                     h["remote"],
