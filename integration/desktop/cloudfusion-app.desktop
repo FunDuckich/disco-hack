@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.5
+Type=Application
+Name=CloudFusion
+Comment=Агрегатор облачных хранилищ
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 /usr/bin/cloudfusion
+Icon=cloudfusion
+Terminal=false
+Categories=Network;FileTransfer;Qt;
+StartupNotify=true

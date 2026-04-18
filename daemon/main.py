@@ -97,9 +97,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="CloudFusion", lifespan=lifespan)
 
 app.add_middleware(LoggingMiddleware)
+
+_cors_extra = [x.strip() for x in os.getenv("ALLOWED_ORIGINS", "").split(",") if x.strip()]
+_cors_regex_default = (
+    r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+    r"|^https://tauri\.localhost(:\d+)?$"
+    r"|^tauri://"
+)
+_cors_regex = os.getenv("CORS_ORIGIN_REGEX", "").strip() or _cors_regex_default
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:1420", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://tauri.localhost",
+        "http://tauri.localhost",
+        *_cors_extra,
+    ],
+    allow_origin_regex=_cors_regex,
     allow_methods=["*"],
     allow_headers=["*"],
 )

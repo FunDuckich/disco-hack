@@ -1,11 +1,13 @@
 [Desktop Entry]
 Type=Service
-MimeType=all/all;
+MimeType=*/*
 Actions=getLink;
 X-KDE-ServiceTypes=KonqPopupMenu/Plugin
 X-KDE-Priority=TopLevel
+Name=CloudFusion
+Comment=Публичная ссылка (Yandex / Nextcloud). Установка: bash integration/desktop/install-user.sh
 
 [Desktop Action getLink]
 Name=CloudFusion: Получить публичную ссылку
 Icon=link
-Exec=python3 integration/scripts/share_bridge.py "%f"
+Exec=/usr/bin/python3 REPLACE_CF_SHARE_BRIDGE %f

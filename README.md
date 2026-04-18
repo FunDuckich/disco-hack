@@ -30,75 +30,68 @@
 
 ---
 
-## Почему папки на смонтированном диске были «пустыми»?
+## Если в подпапках на `~/CloudFusion` пусто
 
-Содержимое каталогов на FUSE-драйве берётся из **локального индекса SQLite**, который заполняется при старте демона из API Яндекс.Диска. Раньше вызывался только один уровень `listdir("disk:/")`: API отдаёт **только прямые** дочерние элементы корня. Вложенные файлы и папки не попадали в базу, поэтому в проводнике корень выглядел нормально, а при входе в любую подпапку — пусто (хотя в облаке там всё есть).
-
-**Исправление:** рекурсивный обход каталогов в `daemon/cloud_api/yandex.py` (`get_all_files_flat`). После обновления кода перезапустите демон; при необходимости удалите старую БД `daemon/database/cloudfusion.db`, чтобы пересобрать дерево с нуля.
+Индекс для FUSE берётся из **SQLite** (заполняется демоном из API облака). Если корень виден, а внутри папок пусто — перезапустите демон после обновления кода; при необходимости удалите файл БД (`~/.local/share/cloudfusion/cloudfusion.db` или ваш `DB_PATH` в `.env`) и дайте демону заново проиндексировать дерево. Индексация Яндекс.Диска: рекурсивный обход в `daemon/cloud_api/yandex.py` (`get_all_files_flat`).
 
 ---
 
-## Как проверить на Ubuntu (ручной тест)
+## Проверка FUSE и индекса (Linux)
 
 1. Установите зависимости демона, авторизуйте Яндекс через UI/эндпоинты, как в вашем сценарии.
 2. Запустите демон с FUSE; в логах должны появиться строки вроде «Всего записей в индексе: …» и при открытии папки — «Найдено N элементов в БД» с **N > 0** для непустых каталогов.
 3. В терминале: `ls -la ~/CloudFusion` и `ls -la ~/CloudFusion/ИмяПапки` — списки должны совпадать с тем, что видно в веб-интерфейсе Диска.
-4. Дополнительно можно проверить SQLite: `sqlite3 daemon/database/cloudfusion.db "SELECT parent_id, COUNT(*) FROM files GROUP BY parent_id;"` — для идентификаторов папок с детьми счётчики должны быть больше нуля.
+4. Дополнительно можно проверить SQLite (подставьте путь к своей БД, чаще всего `~/.local/share/cloudfusion/cloudfusion.db`):  
+   `sqlite3 ~/.local/share/cloudfusion/cloudfusion.db "SELECT parent_id, COUNT(*) FROM files GROUP BY parent_id;"` — для идентификаторов папок с детьми счётчики должны быть больше нуля.
 
 ---
 
 ## 📂 Структура проекта
 
 *   `/daemon` — Сердце проекта: FUSE-драйвер, работа с SQLite и API облаков.
-*   `/src` — Фронтенд на React (TypeScript): интерфейс настроек и мониторинга.
+*   `/src` — Фронтенд на React (JSX): интерфейс настроек и мониторинга.
 *   `/src-tauri` — Бэкенд на Rust: управление окнами, треем и запуск Sidecar-процессов.
 *   `/integration` — Системные конфиги для ALT Linux (Service Menus для Dolphin).
 
 ---
 
-## 🛠 Установка и запуск (для разработчиков)
+## Установка и запуск: только RPM
 
-### Требования:
-*   Python 3.12+
-*   Node.js 18+
-*   Rust (для сборки Tauri)
-*   Библиотека `libfuse` (стандарт в ALT Linux)
+Официальная поставка для Linux — **один RPM-пакет** по [`packaging/rpm/cloudfusion.spec`](packaging/rpm/cloudfusion.spec). Полная инструкция по зависимостям ОС, сбоям и ручным шагам: **[packaging/rpm/README.md](packaging/rpm/README.md)**.
 
-### Быстрый старт:
+### Сборка RPM у себя (кратко)
 
-1.  **Клонируйте репозиторий:**
-    ```bash
-    git clone https://github.com/FunDuckich/disco-hack.git
-    cd disco-hack
-    ```
+1. Клонировать репозиторий и перейти в корень (**РЕПО**).
+2. Один раз поставить пакеты сборщика (ALT или Fedora) — **готовые команды по одной строке** в начале [packaging/rpm/README.md](packaging/rpm/README.md) (в т.ч. **`libwebkit2gtk4.1-devel`** для Tauri на ALT p11).
+3. Запустить из РЕПО **[`build-rpm.sh`](build-rpm.sh)** (или то же самое: [`scripts/build-cloudfusion-rpm.sh`](scripts/build-cloudfusion-rpm.sh)). Пакеты ОС скрипт **не** ставит; подготавливает **`SOURCES`** и вызывает **`rpmbuild`**.
 
-2.  **Настройте бэкенд:** импорты внутри `daemon` — относительные, запускайте из **корня репозитория** (`disco-hack`), чтобы пакет `daemon` был виден Python.
-    ```bash
-    cd disco-hack
-    cd daemon
-    python -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
-    cd ..
-    python -m daemon.main
-    ```
-    Альтернатива из корня: `python run_backend.py`. Seed: `python -m daemon.seed`.
+```bash
+./build-rpm.sh
+```
 
-3.  **FUSE (mount) — только Linux / WSL.** Скрипт `daemon/core/mount.py` **нельзя** запускать как файл (`python .../mount.py`): относительные импорты работают только как модуль пакета `daemon` из **корня репозитория**.
-    ```bash
-    cd /mnt/c/Documents/GitHub/disco-hack
-    source daemon/venv/bin/activate
-    python run_mount.py
-    ```
-    То же самое: `python -m daemon.core.mount` из того же каталога `disco-hack`. В Windows PowerShell FUSE обычно недоступен — открой терминал **дистрибутива WSL** (Ubuntu), перейди в `cd` на путь под `/mnt/c/...` к клону и запусти команду там.
+Опционально сначала подтянуть коммиты: **`./build-rpm.sh --pull`** (нужен **`git`** и настроенный **`git pull`** для ветки).
 
-    **PyCharm:** Run → Edit Configurations → **+** → Python → **Module name:** `daemon.core.mount` → **Working directory:** корень проекта (`disco-hack`, переменная `$ProjectFileDir$`). Интерпретатор — WSL, где стоят `pyfuse3` и `libfuse`. Либо **Script path:** `run_mount.py`, working directory — снова корень репо.
+Порядок внутри скрипта: проверки → **`daemon/.env`** при отсутствии → **`npm install`** → **`npm run tauri build`** → **[`scripts/build-linux-daemon.sh`](scripts/build-linux-daemon.sh)** (демон в **`build/daemon-release/`**) → **`SOURCES`** → **встроенный ASCII-spec** в **`SPECS/`** → **`LC_ALL=C rpmbuild`** из каталога **`_topdir`**. При падении **`rpmbuild`** дополнительно собирается **`build/cloudfusion-*-linux-x86_64.tar.gz`**. Флаги: **`--tarball`** (только архив), **`--skip-npm`**, **`--only-sources`**, **`--pull`**, **`RPMBUILD_TOPDIR`**.
 
-4.  **Запустите интерфейс (в другом терминале):**
-    ```bash
-    npm install
-    npm run tauri dev
-    ```
+4. Готовый файл: **`~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm`** (или подкаталог `RPMS` вашего `_topdir`).
+
+5. **Проверка** (`rpm -qpl`, установка, `rpm -V`, запуск): отдельный раздел в [packaging/rpm/README.md](packaging/rpm/README.md).
+
+Тот же путь **вручную** (без скрипта) расписан в [packaging/rpm/README.md](packaging/rpm/README.md) шагами **1–8**.
+
+### Уже есть готовый `.rpm`
+
+Если собирали под пользователем **`disco`**, а ставите от **root**, путь **`~/rpmbuild`** у root — это **`/root`**, файла там нет. Нужен **полный** путь, например:
+
+```bash
+sudo rpm -Uvh /home/disco/rpmbuild/RPMS/x86_64/cloudfusion-0.1.0-1.x86_64.rpm
+```
+
+(Подставьте своего пользователя и имя файла из **`ls …/RPMS/x86_64/`**.)
+
+Пункт в меню **CloudFusion**; для OAuth в сеансе нужны **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (см. [`daemon/.env.example`](daemon/.env.example)). После установки перезапустите Dolphin для KIO — [`integration/README.md`](integration/README.md).
+
+База SQLite по умолчанию: **`~/.local/share/cloudfusion/cloudfusion.db`** (`DB_PATH` в `daemon/.env` при ручном запуске демона).
 
 ---
 
