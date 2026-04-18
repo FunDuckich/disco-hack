@@ -2,7 +2,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Body, HTTPException, Query
-from ..schemas import FileItem, PathSegment, PinResponse, SearchResult, SyncResponse
+from ..schemas import FileItem, PathSegment, PinBody, PinResponse, SearchResult, SyncResponse
 from ...cloud_api.nextcloud import NextcloudAsyncClient
 from ...cloud_api.yandex import YandexDiskAsyncClient
 from ...config import settings
@@ -60,8 +60,27 @@ def make_router(db: DBManager) -> APIRouter:
         return await db.get_ancestors(file_id)
 
     @router.post("/files/{file_id}/pin", response_model=PinResponse)
-    async def api_pin(file_id: int, pinned: bool):
-        await db.toggle_pin(file_id, pinned)
+    async def api_pin(file_id: int, body: PinBody):
+        """Тело JSON: {\"pinned\": true|false} — иначе FastAPI ждал бы query-параметр."""
+        file = await db.get_file_by_id(file_id)
+        if file is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        await db.toggle_pin(file_id, body.pinned)
+        return {"status": "ok"}
+
+    @router.post("/files/{file_id}/drop_local_cache", response_model=PinResponse)
+    async def api_drop_local_cache(file_id: int):
+        """Убрать локальную копию (cached или частичный stub), строка в БД → stub без local_path."""
+        file = await db.get_file_by_id(file_id)
+        if file is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        if file.get("is_dir"):
+            raise HTTPException(status_code=400, detail="cannot drop cache for a directory")
+        if file.get("is_pinned"):
+            raise HTTPException(status_code=409, detail="file is pinned")
+        ok = await db.drop_local_cache_file(file_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="File not found")
         return {"status": "ok"}
 
     @router.post("/files/{file_id}/sync", response_model=SyncResponse)

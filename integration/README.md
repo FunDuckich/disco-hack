@@ -16,6 +16,8 @@
 | `/usr/share/applications/cloudfusion-app.desktop` | Ярлык |
 | `/usr/share/kio/servicemenus/cloudfusion-link.desktop` | Пункт «публичная ссылка» в Dolphin |
 
+Ожидаемые **.desktop** в репозитории: `integration/desktop/cloudfusion-app.desktop` (ярлык приложения, `Exec` под установку в `/usr/bin/cloudfusion`) и `integration/desktop/cloudfusion-link.desktop` (только сервисное меню Dolphin; путь к `share_bridge.py` подставляет `install-user.sh` или RPM). Отдельных .desktop для «выгнать из кэша» нет — это **HTTP**: `POST /api/files/{id}/drop_local_cache`, закрепление: `POST /api/files/{id}/pin` с телом `{"pinned":true}`.
+
 Перезапустите Dolphin: `kquitapp5 dolphin` и снова откройте его.
 
 Переменная **`CLOUDFUSION_API_BASE`** (например `http://127.0.0.1:8000`) нужна мосту, если API не на стандартном адресе.

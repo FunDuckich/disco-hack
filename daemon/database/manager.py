@@ -503,6 +503,32 @@ class DBManager:
         )
         await db.commit()
 
+    async def drop_local_cache_file(self, file_id: int) -> bool:
+        """Снять локальный кэш: удалить файлы на диске и вернуть запись в stub (без трогания облака)."""
+        row = await self.get_file_by_id(file_id)
+        if not row or row.get("is_dir"):
+            return False
+        cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+        name = row.get("name") or ""
+        partial = os.path.join(cache_dir, f"{file_id}_{name}")
+        paths = [row.get("local_path"), partial]
+        for p in paths:
+            if not p:
+                continue
+            exp = os.path.expanduser(p)
+            if os.path.isfile(exp):
+                try:
+                    os.unlink(exp)
+                except OSError:
+                    pass
+        db = await self.get_db()
+        await db.execute(
+            "UPDATE files SET status = 'stub', local_path = NULL WHERE id = ?",
+            (file_id,),
+        )
+        await db.commit()
+        return True
+
     async def set_file_status(self, file_id: int, status: str):
         db = await self.get_db()
         await db.execute("UPDATE files SET status = ? WHERE id = ?", (status, file_id))

@@ -26,6 +26,7 @@ _MOVE_TIMEOUT = 180.0
 _GET_META_TIMEOUT = 60.0
 # Пуллинг роста файла при stub + read (видео качается в фоне).
 _STUB_READ_POLL_SEC = 0.05
+_STUB_READ_MAX_SEC = 300.0
 
 
 def _stub_cache_path_for(db_id: int, name: str) -> str:
@@ -277,6 +278,12 @@ class CloudFusionVFS(pyfuse3.Operations):
             cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
             await asyncio.to_thread(os.makedirs, cache_dir, 0o755, True)
             local_path = self._stub_cache_path(db_id, row["name"])
+            # Сбой прошлой попытки оставляет «обрубок» — повторное открытие тогда ломает метаданные/чтение.
+            if await asyncio.to_thread(os.path.isfile, local_path):
+                try:
+                    await asyncio.to_thread(os.unlink, local_path)
+                except OSError:
+                    pass
             target = self._client_for_cloud_type(row.get("cloud_type"))
             if not target:
                 raise RuntimeError("no cloud client")
@@ -309,10 +316,13 @@ class CloudFusionVFS(pyfuse3.Operations):
         want_end = off + size
         if total_hint > 0:
             want_end = min(want_end, total_hint)
-        while True:
+        deadline = time.monotonic() + _STUB_READ_MAX_SEC
+        while time.monotonic() < deadline:
             row = await self.db_manager.get_file_by_id(db_id)
             if row.get("status") == "cached":
-                return
+                lp = row.get("local_path")
+                if lp and await asyncio.to_thread(os.path.isfile, os.path.expanduser(lp)):
+                    return
             clen = 0
             if await asyncio.to_thread(os.path.isfile, local_path):
                 clen = await asyncio.to_thread(_sync_file_size, local_path)
@@ -323,14 +333,30 @@ class CloudFusionVFS(pyfuse3.Operations):
                 exc = t.exception()
                 if exc is not None:
                     raise pyfuse3.FUSEError(errno.EIO) from exc
-                if clen > off or (total_hint > 0 and off >= total_hint):
+                row2 = await self.db_manager.get_file_by_id(db_id)
+                if row2.get("status") == "cached":
+                    return
+                if total_hint > 0 and off >= total_hint:
+                    return
+                if clen > off:
                     return
                 if await asyncio.to_thread(os.path.isfile, local_path):
                     clen2 = await asyncio.to_thread(_sync_file_size, local_path)
                     if clen2 > off or clen2 >= want_end:
                         return
-                raise pyfuse3.FUSEError(errno.EIO)
+                # download() завершился, строка в БД ещё stub или размер ещё не виден — не падаем сразу (KDE «метаданные»).
+                await asyncio.sleep(_STUB_READ_POLL_SEC * 4)
+                continue
             await asyncio.sleep(_STUB_READ_POLL_SEC)
+        log.warning(
+            "FUSE stub read wait timeout db_id=%s off=%s size=%s hint=%s path=%s",
+            db_id,
+            off,
+            size,
+            total_hint,
+            local_path,
+        )
+        raise pyfuse3.FUSEError(errno.EIO)
 
     async def _stub_await_fully_cached(self, db_id: int) -> None:
         """Для open(WR) по stub — нужен полный локальный файл."""
@@ -560,7 +586,8 @@ class CloudFusionVFS(pyfuse3.Operations):
         accmode = flags & os.O_ACCMODE
         if accmode == os.O_RDONLY:
             if row.get("status") == "stub":
-                asyncio.create_task(self._stub_start_or_join_download(db_id))
+                # Раньше create_task: первый read мог опередить старт воркера → сбой «метаданных» в Dolphin.
+                await self._stub_start_or_join_download(db_id)
             fi = pyfuse3.FileInfo(fh=inode)
             fi.direct_io = False
             if row.get("status") == "cached" and row.get("local_path"):

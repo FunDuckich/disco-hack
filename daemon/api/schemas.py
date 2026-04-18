@@ -42,6 +42,10 @@ class StatsResponse(BaseModel):
     total_files_count: int = 0
     cached_files_count: int = 0
 
+class PinBody(BaseModel):
+    pinned: bool
+
+
 class PinResponse(BaseModel):
     status: str
 

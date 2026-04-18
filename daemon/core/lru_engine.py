@@ -20,7 +20,7 @@ async def run_lru_cleanup(db_path, cache_dir, max_size_gb=5):
             logging.info(f"LRU: Cache overflow ({current_size // 1024 ** 2} MB). Need to free {diff // 1024 ** 2} MB")
 
             cursor = await db.execute('''
-                SELECT id, local_path, size 
+                SELECT id, local_path, size, name
                 FROM files 
                 WHERE status = 'cached' AND is_pinned = 0 
                 ORDER BY last_accessed ASC
@@ -31,13 +31,20 @@ async def run_lru_cleanup(db_path, cache_dir, max_size_gb=5):
             for file in rows:
                 if freed >= diff: break
 
-                # Физическое удаление файла
-                if file['local_path'] and os.path.exists(file['local_path']):
-                    try:
-                        os.remove(file['local_path'])
-                        logging.info(f"LRU: Deleted {file['local_path']}")
-                    except Exception as e:
-                        logging.error(f"LRU: Failed to delete {file['local_path']}: {e}")
+                # Физическое удаление: путь из БД и согласованный stub-путь (id_имя).
+                paths_try = []
+                if file["local_path"]:
+                    paths_try.append(os.path.expanduser(file["local_path"]))
+                name = file["name"] or ""
+                if name:
+                    paths_try.append(os.path.join(cache_dir, f"{file['id']}_{name}"))
+                for pth in dict.fromkeys(paths_try):
+                    if pth and os.path.isfile(pth):
+                        try:
+                            os.remove(pth)
+                            logging.info("LRU: Deleted %s", pth)
+                        except Exception as e:
+                            logging.error("LRU: Failed to delete %s: %s", pth, e)
 
                 await db.execute(
                     "UPDATE files SET status = 'stub', local_path = NULL WHERE id = ?",
