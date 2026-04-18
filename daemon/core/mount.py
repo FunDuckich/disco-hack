@@ -17,6 +17,30 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+async def _background_initial_sync(db_manager: DBManager, active_clients: dict, yandex_root_id: int) -> None:
+    for cloud_type, client in active_clients.items():
+        try:
+            log.info("Фоновая синхронизация структуры для %s...", cloud_type.upper())
+            cloud_files = await client.get_all_files_flat()
+            if cloud_files:
+                if cloud_type == "yandex":
+                    await import_cloud_to_db(
+                        db_manager,
+                        cloud_files,
+                        cloud_type=cloud_type,
+                        path_to_id_seed={"": yandex_root_id},
+                    )
+                else:
+                    await import_cloud_to_db(
+                        db_manager,
+                        cloud_files,
+                        cloud_type=cloud_type,
+                    )
+                log.info("%s синхронизирован (фон).", cloud_type.upper())
+        except Exception as e:
+            log.error("Ошибка фоновой синхронизации %s: %s", cloud_type, e)
+
+
 async def start_cloud_fusion():
     if os.geteuid() == 0:
         msg = (
@@ -57,28 +81,6 @@ async def start_cloud_fusion():
             logging.info("Нет подключенных дисков. Ожидание авторизации...")
             await asyncio.sleep(5)
 
-    for cloud_type, client in active_clients.items():
-        try:
-            logging.info("Синхронизация структуры для %s...", cloud_type.upper())
-            cloud_files = await client.get_all_files_flat()
-            if cloud_files:
-                if cloud_type == "yandex":
-                    await import_cloud_to_db(
-                        db_manager,
-                        cloud_files,
-                        cloud_type=cloud_type,
-                        path_to_id_seed={"": yandex_root_id},
-                    )
-                else:
-                    await import_cloud_to_db(
-                        db_manager,
-                        cloud_files,
-                        cloud_type=cloud_type,
-                    )
-                logging.info("%s синхронизирован.", cloud_type.upper())
-        except Exception as e:
-            logging.error("Ошибка синхронизации %s: %s", cloud_type, e)
-
     vfs = CloudFusionVFS(db_manager, active_clients)
 
     yandex_client = active_clients.get("yandex")
@@ -93,7 +95,11 @@ async def start_cloud_fusion():
     pyfuse3.asyncio.enable()
     pyfuse3.init(vfs, mountpoint, fuse_options)
 
-    logging.info(f"--- CloudFusion монтируется к {mountpoint} ---")
+    asyncio.create_task(
+        _background_initial_sync(db_manager, active_clients, yandex_root_id)
+    )
+
+    logging.info(f"--- CloudFusion монтируется к {mountpoint} (полный индекс в фоне) ---")
 
     try:
         await pyfuse3.main()
