@@ -2,6 +2,7 @@
 # Сборка из корня репозитория:
 #   pip install -r daemon/requirements-build.txt
 #   pyinstaller --clean -y daemon/pyinstaller/cloudfusion-daemon.spec
+# Точка входа: daemon/pyinstaller/entry.py (абсолютные импорты; не daemon/__main__.py).
 # Результат: build/daemon-release/cloudfusion-daemon (один файл; distpath задаётся в build-linux-daemon.sh).
 from pathlib import Path
 
@@ -39,13 +40,14 @@ hiddenimports = [
 try:
     from PyInstaller.utils.hooks import collect_submodules
 
+    hiddenimports += collect_submodules("daemon")
     hiddenimports += collect_submodules("starlette")
     hiddenimports += collect_submodules("fastapi")
 except Exception:
     pass
 
 a = Analysis(
-    [str(ROOT / "daemon" / "__main__.py")],
+    [str(ROOT / "daemon" / "pyinstaller" / "entry.py")],
     pathex=[str(ROOT)],
     binaries=[],
     datas=[],

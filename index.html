@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+    <!-- Непрозрачный фон до загрузки CSS/React — иначе в WebKit/ВМ часто «залипает» кадр рабочего стола под окном -->
+    <style>
+      html, body, #root { min-height: 100%; margin: 0; background-color: #edeef0; }
+    </style>
     <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:italic,wght@400;700&display=swap" rel="stylesheet">
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
