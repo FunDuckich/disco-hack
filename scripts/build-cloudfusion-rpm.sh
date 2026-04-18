@@ -91,6 +91,7 @@ Name:           cloudfusion
 Version:        __VERSION__
 Release:        1%{?dist}
 Summary:        CloudFusion desktop and Dolphin integration
+Group:          Graphical desktop/Other
 License:        MIT
 URL:            https://github.com/FunDuckich/disco-hack
 Source0:        cloudfusion

@@ -375,5 +375,6 @@ kquitapp5 dolphin
 | `install: ... cloudfusion-daemon: Нет такого файла` | Собирайте демон **после** **`npm run tauri build`** или пользуйтесь **`./build-rpm.sh`**. Бинарь: **`build/daemon-release/cloudfusion-daemon`** (не **`dist/`**). |
 | `Файл ... cloudfusion.spec не похож на файл спецификации` | Обновите скрипт: **`./build-rpm.sh`** генерирует spec в **`~/rpmbuild/SPECS/`** сам. Вручную из git-файла: **`dos2unix`**, см. **шаг 7**. Запасной вариант: **`./build-rpm.sh --tarball`** (без **`rpmbuild`**). |
 | `rpmbuild: command not found` | Пакет **`rpm-build`** (или аналог в вашем дистрибутиве). |
+| `Group field must be present` | В spec нужна строка **`Group:`** (в репозитории: **`Graphical desktop/Other`**). Если ALT ругается на значение — подставьте группу с установленного пакета: **`rpm -qi dolphin | grep '^Group'`**. |
 
 В [`cloudfusion.spec`](cloudfusion.spec) при необходимости поправьте **`Requires:`** для FUSE под имя пакета вашего дистрибутива.
