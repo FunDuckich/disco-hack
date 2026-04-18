@@ -222,9 +222,8 @@ async def merge_last_uploaded_loop(
 
         raw = await db.get_config("sync_poll_interval_minutes")
         try:
-            minutes = float(raw) if raw is not None else 5.0
+            minutes = float(raw) if raw is not None else 1.0
         except (TypeError, ValueError):
             minutes = 5.0
         minutes = max(0.5, minutes)
         await asyncio.sleep(minutes * 60.0)
-Ка
