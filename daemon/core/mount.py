@@ -11,6 +11,7 @@ from ..database.importer import import_cloud_to_db
 from ..database.manager import DBManager
 from .vfs import CloudFusionVFS
 from .yandex_folder_sync import merge_last_uploaded_loop
+from .nextcloud_sync import nextcloud_sync_loop
 
 log = logging.getLogger(__name__)
 
