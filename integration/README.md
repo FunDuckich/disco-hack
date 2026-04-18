@@ -1,61 +1,71 @@
 # Интеграция с рабочим столом (Dolphin / KDE)
 
-## Service Menu «публичная ссылка»
+**РЕПО** — корень клона проекта `disco-hack`. Пути ниже относительно **РЕПО**, если не указано абсолютно.
 
-1. Убедитесь, что демон запущен (`python -m daemon.main` или `run_backend.py`) и точка монтирования совпадает с `MOUNTPOINT` в `.env` (по умолчанию `~/CloudFusion`).
-2. Скопируйте `desktop/cloudfusion-link.desktop` в каталог меню KIO:
-   - пользователь: `~/.local/share/kio/servicemenus/`
-   - системно: `/usr/share/kio/servicemenus/` (нужны права root)
-3. В строке `Exec=` укажите **абсолютный** путь к `integration/scripts/share_bridge.py` (или установите скрипт в `~/bin` и вызовите его оттуда). Для пользовательской установки удобнее [`install-user.sh`](desktop/install-user.sh).
-4. Перезапустите Dolphin (или выполните `kquitapp5 dolphin` и откройте снова).
-5. Правый клик по **файлу** (не каталогу) внутри `YandexDisk` или `Nextcloud` под точкой монтирования → действие «CloudFusion: Получить публичную ссылку».
+---
 
-Переменная `CLOUDFUSION_API_BASE` (например `http://127.0.0.1:8000`) задаёт адрес API, если демон слушает не localhost:8000.
+## Service Menu «публичная ссылка» (ручная установка без RPM)
 
-### База демона (XDG)
+Демон с API должен быть запущен (`python -m daemon.main` из **РЕПО**, см. корневой README). Точка монтирования по умолчанию — `~/CloudFusion` (переменная `MOUNTPOINT` в `daemon/.env`).
 
-По умолчанию SQLite лежит в `~/.local/share/cloudfusion/cloudfusion.db` (или `$XDG_DATA_HOME/cloudfusion/cloudfusion.db`). Переопределение: переменная окружения `DB_PATH`.
+### Порядок действий
 
-## Как тестировать быстро
+1. Откройте терминал, выполните `cd РЕПО`.
+2. Убедитесь, что демон слушает `http://127.0.0.1:8000` (или задайте `CLOUDFUSION_API_BASE` при вызове моста).
+3. Скопируйте шаблон **`integration/desktop/cloudfusion-link.desktop`** в каталог KIO:
+   - для одного пользователя: **`~/.local/share/kio/servicemenus/`**
+   - системно (root): **`/usr/share/kio/servicemenus/`**
+4. В скопированном файле в строке **`Exec=`** должен быть **абсолютный** путь к скрипту **`РЕПО/integration/scripts/share_bridge.py`** (не относительный путь из РЕПО в короткой форме — Dolphin подставляет `%f`, путь к скрипту должен быть полным).
 
-- Запустить демон, смонтировать FUSE, положить тестовый файл в облако, дождаться строки в SQLite.
-- Вызвать вручную:  
-  `python3 integration/scripts/share_bridge.py "$HOME/CloudFusion/YandexDisk/…/file.txt"`  
-  или с Nextcloud:  
-  `…/CloudFusion/Nextcloud/…/file.txt`
-- В ответе в stdout должна появиться URL; при ошибке — stderr и (если есть) `notify-send`.
+   Удобнее автоматизировать: из **РЕПО** запустите bash-скрипт **`integration/desktop/install-user.sh`** — он сам положит desktop-файл в `~/.local/share/kio/servicemenus/` и подставит путь к `share_bridge.py`.
 
-## Установка RPM (ALT и др.)
+5. Перезапустите Dolphin: `kquitapp5 dolphin` и снова откройте Dolphin (или просто перезапуск сессии).
+6. В Dolphin: правый клик по **файлу** (не по каталогу) внутри смонтированного `YandexDisk` / `Nextcloud` под `~/CloudFusion` → пункт **«CloudFusion: Получить публичную ссылку»**.
 
-Готовый spec: [`packaging/rpm/cloudfusion.spec`](../packaging/rpm/cloudfusion.spec). Краткая инструкция по подготовке `SOURCES`: [`packaging/rpm/README.md`](../packaging/rpm/README.md).
+Переменная **`CLOUDFUSION_API_BASE`** (например `http://127.0.0.1:8000`) задаёт URL API, если демон не на стандартном адресе.
 
-После установки RPM:
+### База демона
 
-- В меню появится **CloudFusion** (файл [`cloudfusion-app.desktop`](desktop/cloudfusion-app.desktop) → `/usr/share/applications/`).
-- Демон как бинарь: `/usr/libexec/cloudfusion/cloudfusion-daemon` (PyInstaller).
-- KIO: `/usr/share/kio/servicemenus/cloudfusion-link.desktop` с `Exec=` на `/usr/libexec/cloudfusion/share_bridge.py`.
+По умолчанию SQLite: **`~/.local/share/cloudfusion/cloudfusion.db`**. Иначе — переменная **`DB_PATH`** в `daemon/.env`.
 
-Перезапустите Dolphin, чтобы подхватить сервисное меню.
+---
 
-## Единый запуск: Tauri + демон (Linux)
+## После установки RPM
 
-В [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) на **Linux** при старте приложения:
+Пути уже заданы пакетом:
 
-1. Ищется исполняемый файл демона: `CLOUDFUSION_DAEMON_BIN`, затем `cloudfusion-daemon` рядом с бинарём Tauri, затем `/usr/libexec/cloudfusion/cloudfusion-daemon` (как после RPM).
-2. Дочерний процесс получает те же переменные окружения, что и UI (`YANDEX_*`, `ENABLE_FUSE`, `DB_PATH`, пути XDG и т.д.).
-3. Ожидается готовность `127.0.0.1:8000`, затем открывается окно.
-4. При закрытии главного окна дочерний демон завершается.
+- Ярлык приложения: **`/usr/share/applications/`** (см. `integration/desktop/cloudfusion-app.desktop` в репозитории как источник).
+- Демон: **`/usr/libexec/cloudfusion/cloudfusion-daemon`**
+- Мост Dolphin: **`/usr/libexec/cloudfusion/share_bridge.py`**
+- KIO menu: **`/usr/share/kio/servicemenus/cloudfusion-link.desktop`**
 
-Если бинарь демона не найден (например, разработка без сборки PyInstaller), демон нужно запускать вручную: `python -m daemon.main` из корня репозитория.
+Перезапустите Dolphin после установки.
 
-### Сборка PyInstaller-демона
+Сборка RPM и список файлов для `SOURCES`: [`packaging/rpm/README.md`](../packaging/rpm/README.md) и [`packaging/rpm/cloudfusion.spec`](../packaging/rpm/cloudfusion.spec).
 
-Из корня репозитория на Linux:
+---
+
+## Быстрая проверка моста из терминала
+
+Рабочая директория может быть любой; важен **абсолютный** путь к файлу под `~/CloudFusion`:
 
 ```bash
+python3 /полный/путь/к/РЕПО/integration/scripts/share_bridge.py "$HOME/CloudFusion/YandexDisk/.../файл.txt"
+```
+
+В stdout при успехе — URL; при ошибке — stderr и при наличии `notify-send` / `kdialog` — уведомление.
+
+---
+
+## Tauri и демон на Linux (кратко)
+
+Логика в [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs): при старте UI ищется бинарь демона (`CLOUDFUSION_DAEMON_BIN` → рядом с exe → `/usr/libexec/cloudfusion/cloudfusion-daemon`), поднимается `127.0.0.1:8000`, при уничтожении главного окна процесс демона завершается. Подробные шаги сборки бинаря — в корневом **README**, сценарий C и E.
+
+Сборка PyInstaller из **РЕПО**:
+
+```bash
+cd РЕПО
 ./scripts/build-linux-daemon.sh
 ```
 
-Спека: [`daemon/pyinstaller/cloudfusion-daemon.spec`](../daemon/pyinstaller/cloudfusion-daemon.spec). Зависимости сборки: `daemon/requirements-build.txt`.
-
-Для разработки по-прежнему можно использовать три процесса: демон, при необходимости `python -m daemon.core.mount` (Linux), `npm run tauri dev`.
+Спека: [`daemon/pyinstaller/cloudfusion-daemon.spec`](../daemon/pyinstaller/cloudfusion-daemon.spec). Зависимости сборки: [`daemon/requirements-build.txt`](../daemon/requirements-build.txt).

@@ -57,115 +57,136 @@
 
 ## Запуск и установка
 
-### Что подготовить один раз
+Ниже **«РЕПО»** — это каталог, в который вы клонировали проект (например `C:\Users\you\disco-hack` или `~/disco-hack`). Все пути к файлам в тексте — **относительно РЕПО**, если не сказано иначе.
 
-- **Python 3.12+**, **Node.js 18+**, **Rust** (для `npm run tauri dev` и `npm run tauri build`).
-- Скопируйте [`daemon/.env.example`](daemon/.env.example) в **`daemon/.env`** в корне репозитория и укажите **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (без этого демон не стартует).
-- Для монтирования **`~/CloudFusion`** нужны **Linux или WSL**, пакеты **`libfuse3`** и зависимости из `daemon/requirements.txt` (в т.ч. `pyfuse3`).
+| Что запускается | Зачем | Рабочая директория (cwd) в терминале |
+|-----------------|-------|--------------------------------------|
+| `python -m daemon.main` | HTTP API для UI и Dolphin | **РЕПО** (корень), не папка `daemon/` |
+| `npm run tauri dev` | Окно CloudFusion (Vite + Tauri) | **РЕПО** |
+| `python run_mount.py` или `python -m daemon.core.mount` | Монтирование `~/CloudFusion` (FUSE) | **РЕПО** |
+| `./scripts/build-linux-daemon.sh` | Сборка бинаря демона PyInstaller | **РЕПО** |
+| `npm run tauri build` | Сборка установщика Tauri | **РЕПО** |
 
-База SQLite по умолчанию: **`~/.local/share/cloudfusion/cloudfusion.db`** (или `$XDG_DATA_HOME/cloudfusion/cloudfusion.db`). Переопределение: переменная **`DB_PATH`** в `.env`.
-
----
-
-### Обычная разработка (два терминала)
-
-Все команды Python — из **корня репозитория** (`disco-hack`), чтобы импортировался пакет `daemon`.
-
-**Терминал 1 — демон (API на `http://127.0.0.1:8000`):**
-
-```bash
-git clone https://github.com/FunDuckich/disco-hack.git
-cd disco-hack
-cd daemon
-python -m venv venv
-```
-
-Активация venv:
-
-- Linux / macOS: `source venv/bin/activate`
-- Windows: `venv\Scripts\activate`
-
-Далее:
-
-```bash
-pip install -r requirements.txt
-cd ..
-python -m daemon.main
-```
-
-Можно вместо последней строки: `python run_backend.py`. Тестовое наполнение: `python -m daemon.seed`.
-
-**Терминал 2 — окно CloudFusion:**
-
-```bash
-cd disco-hack
-npm install
-npm run tauri dev
-```
-
-Откроется окно; интерфейс обращается к тому же `127.0.0.1:8000`.
-
-На **Windows** демон всегда запускайте **вручную** (терминал 1). На **Linux** см. следующий блок — демон может подняться вместе с Tauri, если уже собран бинарь PyInstaller.
-
-**Опционально (только Linux / WSL) — FUSE**, из корня репозитория, с активированным venv:
-
-```bash
-python run_mount.py
-```
-
-То же по смыслу: `python -m daemon.core.mount`. Не запускайте `daemon/core/mount.py` напрямую как файл — сломаются относительные импорты.
-
-**PyCharm:** конфигурация Python, **модуль** `daemon.core.mount` или скрипт `run_mount.py`, **рабочая директория** — корень репо; интерпретатор с установленными `pyfuse3` и системным FUSE (часто WSL).
+Проверка, что демон жив: в браузере или `curl` открыть `http://127.0.0.1:8000/health` — должен ответить JSON со статусом.
 
 ---
 
-### Linux: один запуск UI + демон (PyInstaller)
+### Шаг 0. Один раз на машине
 
-Если есть исполняемый файл демона, Tauri на Linux может **сам** его запустить до открытия окна и завершить при закрытии главного окна. Поиск бинаря:
+1. Установите **Python 3.12+**, **Node.js 18+**, **Rust** (toolchain с `cargo`, нужен для Tauri).
+2. Клонируйте репозиторий и запомните путь к **РЕПО**:
+   ```bash
+   git clone https://github.com/FunDuckich/disco-hack.git
+   cd disco-hack
+   ```
+3. Создайте конфиг демона: скопируйте файл [`daemon/.env.example`](daemon/.env.example) в **`daemon/.env`** (именно в подкаталоге `daemon/`, рядом с `requirements.txt`). Заполните **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`**. Без этого команда `python -m daemon.main` упадёт при старте.
+4. (Опционально) Для FUSE на Linux установите системные пакеты вроде **`fuse3`** / **`libfuse3`**, затем в venv подтянутся зависимости из `daemon/requirements.txt` (в т.ч. `pyfuse3`).
 
-1. переменная **`CLOUDFUSION_DAEMON_BIN`** (полный путь), или  
-2. файл **`cloudfusion-daemon`** рядом с бинарём Tauri, или  
-3. путь после RPM: **`/usr/libexec/cloudfusion/cloudfusion-daemon`**.
-
-Сборка демона:
-
-```bash
-./scripts/build-linux-daemon.sh
-# результат: ./dist/cloudfusion-daemon
-```
-
-Пример:
-
-```bash
-export CLOUDFUSION_DAEMON_BIN="$PWD/dist/cloudfusion-daemon"
-npm run tauri dev
-```
-
-Переменные окружения (`YANDEX_*`, `ENABLE_FUSE`, `DB_PATH` и др.) демон наследует от процесса Tauri. Если бинарь **не найден**, работайте как в разделе «два терминала» выше.
+База SQLite по умолчанию: **`~/.local/share/cloudfusion/cloudfusion.db`**. Свой путь можно задать в **`daemon/.env`** переменной **`DB_PATH`**.
 
 ---
 
-### Сборка установщика (без RPM)
+### Сценарий A. Разработка: Windows (или Linux без авто-старта демона)
+
+Нужны **два терминала**. В обоих сначала выполните `cd РЕПО` (подставьте свой путь).
+
+**Терминал 1 — только демон (API)**
+
+1. `cd РЕПО`
+2. `cd daemon`
+3. `python -m venv venv`
+4. Активируйте venv: Windows — `venv\Scripts\activate`; Linux/macOS — `source venv/bin/activate`
+5. `pip install -r requirements.txt`
+6. `cd ..`  ← вы снова в **РЕПО**, это важно
+7. `python -m daemon.main`  
+   Оставьте процесс работать. API: **`http://127.0.0.1:8000`**.
+
+Альтернатива шага 7: `python run_backend.py`. Тестовые данные: `python -m daemon.seed` (тоже из **РЕПО**, venv активен).
+
+**Терминал 2 — только окно приложения**
+
+1. `cd РЕПО`
+2. Один раз: `npm install`
+3. Каждый запуск UI: `npm run tauri dev`  
+   Откроется окно; фронт ходит на **`127.0.0.1:8000`**. Пока работает терминал 1, интерфейс видит API.
+
+На **Windows** демон **всегда** ведёт себя как в терминале 1 (Tauri его не поднимает).
+
+---
+
+### Сценарий B. Разработка: Linux + FUSE (третий процесс)
+
+Сначала сделайте **сценарий A** (терминал 1 с демоном уже запущен, venv активирован в том же терминале или заново активируйте в новом).
+
+**Терминал 3 — монтирование диска в `~/CloudFusion`**
+
+1. `cd РЕПО`
+2. Активируйте тот же venv, что и для демона: `source daemon/venv/bin/activate` (Linux) или эквивалент на Windows/WSL.
+3. Выполните **одну** из команд (обе из **РЕПО**):
+   - `python run_mount.py`  
+   - или `python -m daemon.core.mount`  
+
+Не запускайте файл `daemon/core/mount.py` напрямую как скрипт — сломаются импорты.
+
+**PyCharm:** рабочая директория — **РЕПО**; модуль `daemon.core.mount` или скрипт `run_mount.py`.
+
+---
+
+### Сценарий C. Linux: одно окно Tauri, демон стартует сам (PyInstaller)
+
+Подходит, если вы уже собрали бинарь демона. Всё из **РЕПО**.
+
+1. Сборка демона (нужен Linux, зависимости из `daemon/requirements-build.txt` ставит скрипт во временный venv):
+   ```bash
+   cd РЕПО
+   chmod +x scripts/build-linux-daemon.sh   # если нужно
+   ./scripts/build-linux-daemon.sh
+   ```
+   Результат: файл **`РЕПО/dist/cloudfusion-daemon`** (один исполняемый файл).
+
+2. В **том же терминале**, из которого запускаете `npm run tauri dev`, должны быть видны переменные **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (и при необходимости остальное из `daemon/.env`). Иначе дочерний процесс `cloudfusion-daemon` сразу завершится с ошибкой. Задайте их вручную через `export ИМЯ=значение` или скопируйте строки из `daemon/.env` в окружение сессии другим привычным вам способом.
+
+3. Укажите путь к демону и запустите UI **из РЕПО**:
+   ```bash
+   cd РЕПО
+   export CLOUDFUSION_DAEMON_BIN="$PWD/dist/cloudfusion-daemon"
+   npm install   # если ещё не делали
+   npm run tauri dev
+   ```
+
+Tauri ищет бинарь в таком порядке: **`CLOUDFUSION_DAEMON_BIN`** → файл **`cloudfusion-daemon` рядом с бинарём приложения** → **`/usr/libexec/cloudfusion/cloudfusion-daemon`** (после установки RPM). Если ничего не найдено — используйте **сценарий A** (отдельный терминал с `python -m daemon.main`).
+
+---
+
+### Сценарий D. Сборка установщика Tauri (без RPM)
+
+Рабочая директория — **РЕПО**.
 
 ```bash
+cd РЕПО
 npm install
 npm run tauri build
 ```
 
-Артефакты смотрите в `src-tauri/target/release/bundle/` (формат зависит от ОС).
+Готовые файлы ищите в **`РЕПО/src-tauri/target/release/bundle/`** (подкаталог зависит от ОС: `.deb`, `.rpm`, `.msi`, AppImage и т.д.).
 
 ---
 
-### Установка на Linux через RPM (ALT и другие rpm-based)
+### Сценарий E. Сборка и установка RPM (Linux для пользователя)
 
-Соберите пакет на машине с `rpmbuild`, затем установите обычным способом, например `sudo rpm -Uvh cloudfusion-*.rpm` (или через графический установщик дистрибутива).
+Делается на машине с **`rpmbuild`** и установленными зависимостями для сборки Tauri/Rust. Кратко:
 
-1. Соберите демон: `./scripts/build-linux-daemon.sh`.  
-2. Соберите приложение: `npm run tauri build`, возьмите бинарь GUI из `src-tauri/target/release/bundle/`.  
-3. Положите файлы в `SOURCES` и выполните `rpmbuild -ba packaging/rpm/cloudfusion.spec`, как в [`packaging/rpm/README.md`](packaging/rpm/README.md) (там же список файлов для `SOURCES`).  
-4. После установки RPM: приложение **CloudFusion** в меню; демон — `/usr/libexec/cloudfusion/cloudfusion-daemon`; для пункта Dolphin «публичная ссылка» перезапустите Dolphin (`kquitapp5 dolphin && dolphin`).
+| Шаг | Где (cwd) | Действие |
+|-----|-----------|----------|
+| 1 | **РЕПО** | `./scripts/build-linux-daemon.sh` → появится `dist/cloudfusion-daemon` |
+| 2 | **РЕПО** | `npm install` и `npm run tauri build` → взять **бинарь приложения** из `src-tauri/target/release/bundle/` (имя может быть `cloudfusion` или похожее — см. каталог bundle) |
+| 3 | каталог `SOURCES` для rpmbuild | Скопировать туда файлы по списку в [`packaging/rpm/README.md`](packaging/rpm/README.md): бинарь GUI, `dist/cloudfusion-daemon` как имя из spec, `integration/scripts/share_bridge.py`, оба `.desktop` из `integration/desktop/` |
+| 4 | **РЕПО** (или домашний каталог rpmbuild) | `rpmbuild -ba packaging/rpm/cloudfusion.spec` |
+| 5 | система | Установка: `sudo rpm -Uvh путь/к/собранному.rpm` |
 
-Подробности по Dolphin: [`integration/README.md`](integration/README.md). Дополнительно для CORS: переменные **`ALLOWED_ORIGINS`** и **`CORS_ORIGIN_REGEX`** в [`daemon/main.py`](daemon/main.py).
+После установки: приложение в меню как **CloudFusion**; демон лежит в **`/usr/libexec/cloudfusion/cloudfusion-daemon`**; Dolphin — см. [`integration/README.md`](integration/README.md). Перезапуск Dolphin: `kquitapp5 dolphin && dolphin`.
+
+Если нужны нестандартные CORS-origins для WebView, см. переменные **`ALLOWED_ORIGINS`** и **`CORS_ORIGIN_REGEX`** в [`daemon/main.py`](daemon/main.py).
 
 ---
 
