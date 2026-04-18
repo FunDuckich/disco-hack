@@ -257,6 +257,9 @@ class CloudFusionVFS(pyfuse3.Operations):
         if db_id is None:
             entry.st_mode = stat.S_IFDIR | 0o755
             entry.st_size = 0
+            entry.st_nlink = 2
+            entry.st_blksize = 4096
+            entry.st_blocks = 0
             return entry
 
         row = await self.db_manager.get_file_by_id(db_id)
@@ -266,8 +269,13 @@ class CloudFusionVFS(pyfuse3.Operations):
         if row["is_dir"]:
             entry.st_mode = stat.S_IFDIR | 0o755
             entry.st_size = 0
+            entry.st_nlink = 2
+            entry.st_blksize = 4096
+            entry.st_blocks = 0
         else:
             entry.st_mode = stat.S_IFREG | 0o644
+            entry.st_nlink = 1
+            entry.st_blksize = 4096
             lp = row.get("local_path")
 
             def _attr_size_for_file(local_p, row_size):
@@ -278,6 +286,8 @@ class CloudFusionVFS(pyfuse3.Operations):
             entry.st_size = await asyncio.to_thread(
                 _attr_size_for_file, lp, row["size"]
             )
+            sz = int(entry.st_size)
+            entry.st_blocks = (sz + 511) // 512 if sz else 0
 
         return entry
 
@@ -335,11 +345,28 @@ class CloudFusionVFS(pyfuse3.Operations):
 
         entries = await self.db_manager.get_readdir_entries(parent_db_id)
 
+        stamp = int(time.time() * 1e9)
         for i, row in enumerate(entries[off:], start=off):
             child_inode = self._get_inode(row["id"])
             attr = pyfuse3.EntryAttributes()
             attr.st_ino = child_inode
             attr.st_mode = (stat.S_IFDIR | 0o755) if row["is_dir"] else (stat.S_IFREG | 0o644)
+            attr.st_uid = os.getuid()
+            attr.st_gid = os.getgid()
+            attr.st_atime_ns = stamp
+            attr.st_mtime_ns = stamp
+            attr.st_ctime_ns = stamp
+            if row["is_dir"]:
+                attr.st_nlink = 2
+                attr.st_size = 0
+                attr.st_blksize = 4096
+                attr.st_blocks = 0
+            else:
+                attr.st_nlink = 1
+                sz = int(row.get("size") or 0)
+                attr.st_size = sz
+                attr.st_blksize = 4096
+                attr.st_blocks = (sz + 511) // 512 if sz else 0
 
             if not pyfuse3.readdir_reply(token, row["name"].encode("utf-8"), attr, i + 1):
                 break

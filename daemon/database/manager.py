@@ -418,9 +418,15 @@ class DBManager:
 
     async def update_downloaded_file(self, db_id: int, local_path: str):
         db = await self.get_db()
+        sz = 0
+        try:
+            if os.path.isfile(local_path):
+                sz = os.path.getsize(local_path)
+        except OSError:
+            pass
         await db.execute(
-            "UPDATE files SET status = 'cached', local_path = ?, last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
-            (local_path, db_id)
+            "UPDATE files SET status = 'cached', local_path = ?, size = ?, last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
+            (local_path, sz, db_id),
         )
         await db.commit()
 
