@@ -63,6 +63,7 @@ async def _cancel(task: asyncio.Task | None) -> None:
 async def lifespan(app: FastAPI):
     os.makedirs(os.path.expanduser(settings.cache_dir), exist_ok=True)
     await db.init_db()
+    await db.ensure_yandex_disk_root_folder()
     saved_max = await db.get_config("max_cache_gb")
     if saved_max is not None:
         settings.max_cache_gb = float(saved_max)
@@ -189,6 +190,28 @@ async def yandex_callback(code: str = Query(...)):
     else:
         return "<h1>Ошибка авторизации</h1>"
 
+@app.post("/api/sync/folder")
+async def api_sync_folder(
+    parent_id: int | None = Query(
+        default=None,
+        description="id папки в SQLite; не указывать — корень диска",
+    ),
+    force: bool = Query(
+        default=True,
+        description="True — всегда перезапросить API (кнопка «обновить»)",
+    ),
+):
+    client = await _yandex_client_or_401()
+    effective_parent = parent_id
+    if effective_parent is None:
+        wid = await db.get_yandex_disk_wrapper_id()
+        if wid is None:
+            wid = await db.ensure_yandex_disk_root_folder()
+        effective_parent = wid
+    changed = await sync_yandex_folder_if_stale(
+        db, client, effective_parent, force=force
+    )
+    return {"ok": True, "changed": changed}
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     log.exception("Unhandled error on %s %s", request.method, request.url.path)

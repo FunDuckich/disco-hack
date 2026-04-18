@@ -22,6 +22,18 @@ class YandexDiskAsyncClient:
             logging.error(f"[Yandex API] Ошибка скачивания {remote_path}: {e}")
             raise e
 
+    async def mkdir_remote(self, remote_path: str):
+        await self.client.mkdir(remote_path, wait=True)
+
+    async def remove_remote(self, remote_path: str):
+        await self.client.remove(remote_path, wait=True)
+
+    async def move_remote(self, src_path: str, dst_path: str, *, overwrite: bool = True):
+        await self.client.move(src_path, dst_path, wait=True, overwrite=overwrite)
+
+    async def upload_local_file(self, local_path: str, remote_path: str):
+        await self.client.upload(local_path, remote_path, wait=True)
+
     async def get_meta(self, remote_path: str):
         return await self.client.get_meta(remote_path)
 
