@@ -22,6 +22,7 @@ echo "  Scripts installed to $SCRIPTS_DIR"
 for target_dir in "$KDE5_DIR" "$KDE6_DIR"; do
     mkdir -p "$target_dir"
     cp "$REPO_ROOT/integration/desktop/cloudfusion.desktop" "$target_dir/cloudfusion.desktop"
+    chmod +x "$target_dir/cloudfusion.desktop"
     echo "  Service menu installed to $target_dir"
 done
 
