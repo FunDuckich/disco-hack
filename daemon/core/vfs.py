@@ -114,6 +114,39 @@ class CloudFusionVFS(pyfuse3.Operations):
             )
             raise pyfuse3.FUSEError(errno.EIO) from exc
 
+    async def _cancel_pending_finalize(self, db_id: int) -> None:
+        """Отмена фоновой загрузки (например перед unlink); не трогаем строку БД."""
+        t = self._pending_finalize_uploads.pop(db_id, None)
+        if not t:
+            return
+        if not t.done():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        else:
+            exc = t.exception()
+            if exc is not None:
+                log.debug(
+                    "FUSE: finalize db_id=%s уже завершилась с ошибкой до cancel: %s",
+                    db_id,
+                    exc,
+                )
+
+    async def _background_remove_remote(self, remote_path: str) -> None:
+        """Удаление на стороне Яндекса не блокирует FUSE."""
+        try:
+            await asyncio.wait_for(
+                self._yandex_client().remove_remote(remote_path),
+                timeout=_REMOVE_TIMEOUT,
+            )
+            log.debug("[FUSE bg] remove_remote ok %s", remote_path)
+        except asyncio.TimeoutError:
+            log.error("[FUSE bg] remove_remote timeout %s", remote_path)
+        except Exception:
+            log.exception("[FUSE bg] remove_remote %s", remote_path)
+
     async def _finalize_upload_worker(self, h: dict) -> None:
         db_id = h["db_id"]
         temp = h["temp"]
@@ -143,6 +176,14 @@ class CloudFusionVFS(pyfuse3.Operations):
                 status="cached",
                 local_path=final,
             )
+        except asyncio.CancelledError:
+            log.info("FUSE async finalize upload отменён db_id=%s", db_id)
+            if await asyncio.to_thread(os.path.isfile, temp):
+                try:
+                    await asyncio.to_thread(os.unlink, temp)
+                except OSError:
+                    pass
+            raise
         except Exception:
             log.exception("FUSE async finalize upload db_id=%s", db_id)
             if h.get("created"):
@@ -585,18 +626,11 @@ class CloudFusionVFS(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EISDIR)
         if row.get("cloud_type") != "yandex":
             raise pyfuse3.FUSEError(errno.EROFS)
-        await self._await_pending_finalize(fid)
+        remote_path = row["remote_path"]
+        await self._cancel_pending_finalize(fid)
         row = await self.db_manager.get_file_by_id(fid)
         if not row:
             raise pyfuse3.FUSEError(errno.ENOENT)
-        try:
-            await asyncio.wait_for(
-                self._yandex_client().remove_remote(row["remote_path"]),
-                timeout=_REMOVE_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            log.error("FUSE unlink: remove_remote timeout %s", row["remote_path"])
-            raise pyfuse3.FUSEError(errno.ETIMEDOUT) from None
         lp = row.get("local_path")
         if lp and await asyncio.to_thread(os.path.isfile, lp):
             try:
@@ -605,6 +639,7 @@ class CloudFusionVFS(pyfuse3.Operations):
                 pass
         await self.db_manager.delete_file_row_yandex(fid)
         _invalidate_inode_async(parent_inode)
+        asyncio.create_task(self._background_remove_remote(remote_path))
 
     async def rmdir(self, parent_inode, name, ctx):
         name_s = name.decode("utf-8")
@@ -620,16 +655,10 @@ class CloudFusionVFS(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOTEMPTY)
         if row.get("cloud_type") != "yandex":
             raise pyfuse3.FUSEError(errno.EROFS)
-        try:
-            await asyncio.wait_for(
-                self._yandex_client().remove_remote(row["remote_path"]),
-                timeout=_REMOVE_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            log.error("FUSE rmdir: remove_remote timeout %s", row["remote_path"])
-            raise pyfuse3.FUSEError(errno.ETIMEDOUT) from None
+        remote_path = row["remote_path"]
         await self.db_manager.delete_file_row_yandex(fid)
         _invalidate_inode_async(parent_inode)
+        asyncio.create_task(self._background_remove_remote(remote_path))
 
     async def rename(self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx):
         if flags & pyfuse3.RENAME_EXCHANGE:
