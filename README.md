@@ -57,21 +57,33 @@
 
 ## Установка и запуск: только RPM
 
-Официальная поставка для Linux — **один RPM-пакет**. Вся цепочка (откуда берутся **Node**, **npm**, **Tauri**, **cargo**, куда класть бинарь для spec, как вызвать `rpmbuild`) описана **в одном месте**:
+Официальная поставка для Linux — **один RPM-пакет** по [`packaging/rpm/cloudfusion.spec`](packaging/rpm/cloudfusion.spec). Полная инструкция по зависимостям ОС, сбоям и ручным шагам: **[packaging/rpm/README.md](packaging/rpm/README.md)**.
 
-### [packaging/rpm/README.md](packaging/rpm/README.md)
+### Сборка RPM у себя (кратко)
 
-В начале файла — **отдельные блоки команд** для установки системных пакетов (ALT или Fedora) и при необходимости **rustup**; дальше либо **один скрипт** `./scripts/build-cloudfusion-rpm.sh`, либо шаги **1 → 8** вручную.
+1. Клонировать репозиторий и перейти в корень (**РЕПО**).
+2. Один раз поставить пакеты сборщика (ALT или Fedora) — **готовые команды по одной строке** в начале [packaging/rpm/README.md](packaging/rpm/README.md) (в т.ч. **`libwebkit2gtk4.1-devel`** для Tauri на ALT p11).
+3. Запустить **[`scripts/build-cloudfusion-rpm.sh`](scripts/build-cloudfusion-rpm.sh)** из РЕПО (ставит `SOURCES`, вызывает `rpmbuild`; пакеты ОС сам не ставит):
 
-**Если RPM уже собрали и отдали вам** — установка:
+```bash
+./scripts/build-cloudfusion-rpm.sh
+```
+
+Скрипт по очереди: проверка `git` / `python3` / `node` / `npm` / `cargo` / `rpmbuild` → при необходимости `dos2unix` для spec → при отсутствии **`daemon/.env`** копирует из [`daemon/.env.example`](daemon/.env.example) → [`scripts/build-linux-daemon.sh`](scripts/build-linux-daemon.sh) → `npm install` → `npm run tauri build` → копирование в **`$RPMBUILD_TOPDIR/SOURCES`** (по умолчанию **`~/rpmbuild`**) → **`rpmbuild -ba`**. Опции: **`--skip-npm`**, **`--only-sources`**, переменная **`RPMBUILD_TOPDIR`**.
+
+4. Готовый файл: **`~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm`** (или подкаталог `RPMS` вашего `_topdir`).
+
+Тот же путь **вручную** (без скрипта) расписан в [packaging/rpm/README.md](packaging/rpm/README.md) шагами **1–8**.
+
+### Уже есть готовый `.rpm`
 
 ```bash
 sudo rpm -Uvh cloudfusion-0.1.0-*.rpm
 ```
 
-Дальше: пункт в меню **CloudFusion**, для OAuth задайте в сеансе **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (см. [`daemon/.env.example`](daemon/.env.example)); перезапустите Dolphin для KIO — см. [`integration/README.md`](integration/README.md).
+Пункт в меню **CloudFusion**; для OAuth в сеансе нужны **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (см. [`daemon/.env.example`](daemon/.env.example)). После установки перезапустите Dolphin для KIO — [`integration/README.md`](integration/README.md).
 
-База SQLite по умолчанию: **`~/.local/share/cloudfusion/cloudfusion.db`** (`DB_PATH` в `daemon/.env` при сборке/ручных запусках).
+База SQLite по умолчанию: **`~/.local/share/cloudfusion/cloudfusion.db`** (`DB_PATH` в `daemon/.env` при ручном запуске демона).
 
 ---
 
