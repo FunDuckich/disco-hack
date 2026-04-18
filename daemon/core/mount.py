@@ -6,6 +6,7 @@ import pyfuse3
 import pyfuse3.asyncio
 
 from ..cloud_api.yandex import YandexDiskAsyncClient
+from ..config import settings
 from ..database.importer import import_cloud_to_db
 from ..database.manager import DBManager
 from .vfs import CloudFusionVFS
@@ -17,13 +18,10 @@ logging.basicConfig(level=logging.INFO)
 
 
 async def start_cloud_fusion():
-    mountpoint = os.path.expanduser("~/CloudFusion")
+    mountpoint = os.path.expanduser(settings.mountpoint)
     os.makedirs(mountpoint, exist_ok=True)
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    db_path = os.path.abspath(os.path.join(current_dir, "..", "database", "cloudfusion.db"))
-
-    db_manager = DBManager(db_path)
+    db_manager = DBManager(settings.db_path)
     await db_manager.init_db()
 
     token = None

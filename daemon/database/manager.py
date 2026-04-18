@@ -32,6 +32,7 @@ class DBManager:
 
     async def init_db(self):
         db = await self.get_db()
+        await db.execute("PRAGMA journal_mode=WAL")
         await db.execute('''
             CREATE TABLE IF NOT EXISTS config(
                key TEXT PRIMARY KEY,
@@ -50,15 +51,31 @@ class DBManager:
                 remote_path TEXT,
                 local_path TEXT,
                 etag TEXT,
-                status TEXT DEFAULT 'stub', 
+                status TEXT DEFAULT 'stub',
                 is_pinned BOOLEAN DEFAULT 0,
                 last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(cloud_type, remote_path)
             )
         ''')
         await db.execute('''
-            CREATE VIRTUAL TABLE IF NOT EXISTS files_fts 
+            CREATE VIRTUAL TABLE IF NOT EXISTS files_fts
             USING fts5(name, content='files', content_rowid='id')
+        ''')
+        await db.execute('''
+            CREATE TRIGGER IF NOT EXISTS t_files_ai AFTER INSERT ON files BEGIN
+                INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
+            END
+        ''')
+        await db.execute('''
+            CREATE TRIGGER IF NOT EXISTS t_files_ad AFTER DELETE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
+            END
+        ''')
+        await db.execute('''
+            CREATE TRIGGER IF NOT EXISTS t_files_au AFTER UPDATE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
+                INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
+            END
         ''')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_parent ON files(parent_id)')
         await db.commit()
