@@ -45,6 +45,14 @@ fn daemon_executable() -> PathBuf {
       }
     }
   }
+  for p in [
+    PathBuf::from("/usr/libexec/cloudfusion/cloudfusion-daemon"),
+    PathBuf::from("/usr/lib/cloudfusion/cloudfusion-daemon"),
+  ] {
+    if p.exists() {
+      return p;
+    }
+  }
   PathBuf::from("/usr/libexec/cloudfusion/cloudfusion-daemon")
 }
 
@@ -128,8 +136,21 @@ fn stop_sidecar(app: &tauri::AppHandle) {
   slot.stop();
 }
 
+/// WebKit 2.42+ в ВМ без DRM часто зацикливается на «failed to get GBM device».
+/// Отключаем DMA-BUF-рендерер, если пользователь сам ничего не задал.
+#[cfg(target_os = "linux")]
+fn webkit_vm_defaults() {
+  use std::env;
+  if env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  #[cfg(target_os = "linux")]
+  webkit_vm_defaults();
+
   tauri::Builder::default()
     .on_window_event(|window, event| {
       #[cfg(target_os = "linux")]

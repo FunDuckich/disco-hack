@@ -484,5 +484,6 @@ kquitapp5 dolphin
 | `rpmbuild: command not found` | Пакет **`rpm-build`** (или аналог в вашем дистрибутиве). |
 | `Group field must be present` | В spec нужна строка **`Group:`** (в репозитории: **`Graphical desktop/Other`**). Если ALT ругается на значение — подставьте группу с установленного пакета: **`rpm -qi dolphin | grep '^Group'`**. |
 | **`Файл не найден`** при **`rpm -Uvh ~/rpmbuild/...`** от **root** | У **root** домашний каталог — **`/root`**. Укажите путь к RPM пользователя-сборщика: **`/home/disco/rpmbuild/RPMS/x86_64/cloudfusion-….rpm`** или ставьте без **`su`** через **`sudo rpm -Uvh /home/…/…rpm`**. |
+| **`failed to get GBM device`**, **`failed to create screen`**, зависание ВМ | Типично для **WebKit в виртуалке без нормального GPU**. В актуальном коде: окно **без прозрачности**, в **`.desktop`** — **`WEBKIT_DISABLE_DMABUF_RENDERER=1`** и **`GDK_BACKEND=x11`**, при старте из терминала тоже задаётся отключение DMA-BUF. Если всё ещё плохо: **`LIBGL_ALWAYS_SOFTWARE=1`** перед запуском. На «железе» с нормальной видеокартой при необходимости снимите **`WEBKIT_DISABLE_DMABUF_RENDERER`** (не задавать переменную до запуска) и уберите **`GDK_BACKEND=x11`** из ярлыка. |
 
 В [`cloudfusion.spec`](cloudfusion.spec) при необходимости поправьте **`Requires:`** для FUSE под имя пакета вашего дистрибутива.
