@@ -482,3 +482,14 @@ class DBManager:
             SELECT id, name FROM ancestors ORDER BY depth DESC
         ''', (file_id,))
         return [dict(r) for r in await cursor.fetchall()]
+
+    # manager.py
+
+    async def get_file_by_remote_path(self, remote_path: str, cloud_type: str):
+        db = await self.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM files WHERE remote_path = ? AND cloud_type = ?",
+            (remote_path, cloud_type)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None

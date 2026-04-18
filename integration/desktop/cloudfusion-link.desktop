@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Service
+MimeType=all/all;
+Actions=getLink;
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+X-KDE-Priority=TopLevel
+
+[Desktop Action getLink]
+Name=CloudFusion: Получить публичную ссылку
+Icon=link
+Exec=python3 integration/scripts/share_bridge.py "%f"

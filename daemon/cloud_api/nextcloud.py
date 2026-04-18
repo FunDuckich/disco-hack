@@ -80,3 +80,21 @@ class NextcloudAsyncClient:
         except Exception as e:
             logging.error(f"[Nextcloud] Ошибка при сканировании {path}: {e}")
             return result
+
+        # cloud_api/nextcloud.py
+
+    async def publish(self, remote_path: str) -> str:
+        clean_path = remote_path.replace('nextcloud:', '')
+        if not clean_path.startswith('/'):
+            clean_path = '/' + clean_path
+
+        try:
+            # share_type=3 — это публичная ссылка (Public Link)
+            share = await self.nc.files.sharing.create_share(
+                path=clean_path,
+                share_type=3
+            )
+            return share.url
+        except Exception as e:
+            logging.error(f"[Nextcloud] Ошибка создания ссылки для {clean_path}: {e}")
+            raise e

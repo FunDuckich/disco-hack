@@ -78,3 +78,12 @@ class YandexDiskAsyncClient:
         except Exception as e:
             logging.error(f"[Yandex API] Ошибка получения структуры: {e}")
             return []
+
+    async def publish(self, remote_path: str) -> str:
+        try:
+            await self.client.publish(remote_path)
+            meta = await self.client.get_meta(remote_path)
+            return meta.public_url
+        except Exception as e:
+            logging.error(f"[Yandex API] Ошибка публикации {remote_path}: {e}")
+            raise e
