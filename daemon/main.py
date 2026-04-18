@@ -61,6 +61,9 @@ async def _cancel(task: asyncio.Task | None) -> None:
 async def lifespan(app: FastAPI):
     os.makedirs(os.path.expanduser(settings.cache_dir), exist_ok=True)
     await db.init_db()
+    saved_max = await db.get_config("max_cache_gb")
+    if saved_max is not None:
+        settings.max_cache_gb = float(saved_max)
     lru_task = asyncio.create_task(lru_scheduler())
     log.info("CloudFusion daemon started (cache=%s, limit=%dGB)", settings.cache_dir, settings.max_cache_gb)
 

@@ -50,3 +50,11 @@ class SyncResponse(BaseModel):
 class PathSegment(BaseModel):
     id: int
     name: str
+
+
+class SettingsResponse(BaseModel):
+    max_cache_gb: float
+
+
+class SettingsUpdate(BaseModel):
+    max_cache_gb: float
