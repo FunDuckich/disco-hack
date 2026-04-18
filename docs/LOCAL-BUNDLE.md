@@ -47,7 +47,7 @@ env LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 \
   ./src-tauri/target/release/app
 ```
 
-Конфиг демона: **`~/.config/cloudfusion/.env`** (см. `daemon/.env.example`) или экспорт в сеансе. Без ключей Яндекса для проверки UI: **`CLOUDFUSION_MOCK_YANDEX=1`**.
+Конфиг демона: **`~/.config/cloudfusion/.env`** (см. `daemon/.env.example`) или экспорт в сеансе. Собранный **`cloudfusion-daemon`** без **`YANDEX_*`** сам поднимется в **mock**-режиме (сообщение в stderr); из исходников **`python -m daemon`** без ключей по-прежнему нужен **`CLOUDFUSION_MOCK_YANDEX=1`** или `.env`.
 
 Проверка API после старта окна:
 

@@ -49,19 +49,43 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _is_pyinstaller_bundle() -> bool:
+    """Собранный onefile/onedir: нет repo-cwd с daemon/.env — ключи часто только в ~/.config."""
+    return bool(getattr(sys, "frozen", False)) or getattr(sys, "_MEIPASS", None) is not None
+
+
 def _load() -> Settings:
-    mock = _env_bool("CLOUDFUSION_MOCK_YANDEX", False)
-    yid = os.getenv("YANDEX_CLIENT_ID")
-    ysec = os.getenv("YANDEX_CLIENT_SECRET")
+    yid = (os.getenv("YANDEX_CLIENT_ID") or "").strip() or None
+    ysec = (os.getenv("YANDEX_CLIENT_SECRET") or "").strip() or None
+
+    mock_raw = os.getenv("CLOUDFUSION_MOCK_YANDEX")
+    mock = _env_bool("CLOUDFUSION_MOCK_YANDEX", False) if mock_raw is not None else False
+    mock_explicit_off = mock_raw is not None and not mock
+
+    if not yid or not ysec:
+        if mock_explicit_off:
+            raise RuntimeError(
+                "CLOUDFUSION_MOCK_YANDEX=0 but YANDEX_CLIENT_ID / YANDEX_CLIENT_SECRET are missing."
+            )
+        if _is_pyinstaller_bundle():
+            if not mock:
+                print(
+                    "cloudfusion-daemon: YANDEX_* not set; using mock OAuth placeholders. "
+                    "Add ~/.config/cloudfusion/.env (see daemon/.env.example) for real Yandex. "
+                    "To abort instead: CLOUDFUSION_MOCK_YANDEX=0.",
+                    file=sys.stderr,
+                )
+            mock = True
+        elif mock_raw is None:
+            raise RuntimeError(
+                "Missing YANDEX_CLIENT_ID / YANDEX_CLIENT_SECRET. "
+                "Put them in ~/.config/cloudfusion/.env (see daemon/.env.example) "
+                "or export before starting cloudfusion; for UI-only dev use CLOUDFUSION_MOCK_YANDEX=1."
+            )
+
     if mock:
         yid = yid or "mock-client-id"
         ysec = ysec or "mock-client-secret"
-    elif not yid or not ysec:
-        raise RuntimeError(
-            "Missing YANDEX_CLIENT_ID / YANDEX_CLIENT_SECRET. "
-            "Put them in ~/.config/cloudfusion/.env (see daemon/.env.example) "
-            "or export before starting cloudfusion; for UI-only dev use CLOUDFUSION_MOCK_YANDEX=1."
-        )
     try:
         return Settings(
             cache_dir=os.getenv("CACHE_DIR", "~/.cache/cloud-fusion/"),
