@@ -1,4 +1,6 @@
 import logging
+import os
+
 import aiosqlite
 import os
 
@@ -32,6 +34,7 @@ class DBManager:
 
     async def init_db(self):
         db = await self.get_db()
+        await db.execute("PRAGMA journal_mode=WAL")
         await db.execute('''
             CREATE TABLE IF NOT EXISTS config(
                key TEXT PRIMARY KEY,
@@ -50,15 +53,31 @@ class DBManager:
                 remote_path TEXT,
                 local_path TEXT,
                 etag TEXT,
-                status TEXT DEFAULT 'stub', 
+                status TEXT DEFAULT 'stub',
                 is_pinned BOOLEAN DEFAULT 0,
                 last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(cloud_type, remote_path)
             )
         ''')
         await db.execute('''
-            CREATE VIRTUAL TABLE IF NOT EXISTS files_fts 
+            CREATE VIRTUAL TABLE IF NOT EXISTS files_fts
             USING fts5(name, content='files', content_rowid='id')
+        ''')
+        await db.execute('''
+            CREATE TRIGGER IF NOT EXISTS t_files_ai AFTER INSERT ON files BEGIN
+                INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
+            END
+        ''')
+        await db.execute('''
+            CREATE TRIGGER IF NOT EXISTS t_files_ad AFTER DELETE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
+            END
+        ''')
+        await db.execute('''
+            CREATE TRIGGER IF NOT EXISTS t_files_au AFTER UPDATE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name) VALUES ('delete', old.id, old.name);
+                INSERT INTO files_fts(rowid, name) VALUES (new.id, new.name);
+            END
         ''')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_parent ON files(parent_id)')
         await db.commit()
@@ -124,6 +143,11 @@ class DBManager:
         cursor = await db.execute("SELECT value FROM config WHERE key = ?", (key,))
         row = await cursor.fetchone()
         return row['value'] if row else None
+
+    async def delete_config(self, key: str):
+        db = await self.get_db()
+        await db.execute("DELETE FROM config WHERE key = ?", (key,))
+        await db.commit()
 
     async def bulk_upsert_metadata(self, metadata_list: list[dict]):
         db = await self.get_db()
@@ -400,14 +424,21 @@ class DBManager:
         )
         await db.commit()
 
+    async def set_file_status(self, file_id: int, status: str):
+        db = await self.get_db()
+        await db.execute("UPDATE files SET status = ? WHERE id = ?", (status, file_id))
+        await db.commit()
+
     async def get_stats(self):
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute('''
                 SELECT
-                    COUNT(*) as total_files,
-                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) as cache_size,
-                    COUNT(CASE WHEN is_pinned = 1 THEN 1 END) as pinned_count
+                    COUNT(CASE WHEN is_dir = 0 THEN 1 END) AS total_files,
+                    COUNT(CASE WHEN is_dir = 0 AND status = 'cached' THEN 1 END) AS cached_count,
+                    COUNT(CASE WHEN is_dir = 0 AND status = 'syncing' THEN 1 END) AS syncing_count,
+                    COUNT(CASE WHEN is_dir = 0 AND is_pinned = 1 THEN 1 END) AS pinned_count,
+                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) AS cache_size
                 FROM files
             ''')
             return dict(await cursor.fetchone())
@@ -424,9 +455,25 @@ class DBManager:
         db = await self.get_db()
         db.row_factory = aiosqlite.Row
         cursor = await db.execute('''
-            SELECT f.id, f.name, f.remote_path, f.cloud_type, f.status, f.size 
+            SELECT f.id, f.name, f.remote_path, f.cloud_type, f.status, f.size
             FROM files_fts AS fts
             JOIN files AS f ON f.id = fts.rowid
             WHERE fts.name MATCH ? LIMIT 50
         ''', (f"{query}*",))
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_ancestors(self, file_id: int):
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute('''
+            WITH RECURSIVE ancestors(id, parent_id, name, depth) AS (
+                SELECT id, parent_id, name, 0 FROM files WHERE id = ?
+                UNION ALL
+                SELECT f.id, f.parent_id, f.name, a.depth + 1
+                FROM files f
+                JOIN ancestors a ON f.id = a.parent_id
+                WHERE a.depth < 64
+            )
+            SELECT id, name FROM ancestors ORDER BY depth DESC
+        ''', (file_id,))
         return [dict(r) for r in await cursor.fetchall()]

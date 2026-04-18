@@ -29,8 +29,32 @@ class SearchResult(BaseModel):
 
 class StatsResponse(BaseModel):
     total_files: int
-    cache_size: int
+    cached_count: int
+    syncing_count: int
     pinned_count: int
+    cache_size: int
+    max_size: int
 
 class PinResponse(BaseModel):
     status: str
+
+
+class AuthStatusResponse(BaseModel):
+    connected: bool
+
+
+class SyncResponse(BaseModel):
+    status: str
+
+
+class PathSegment(BaseModel):
+    id: int
+    name: str
+
+
+class SettingsResponse(BaseModel):
+    max_cache_gb: float
+
+
+class SettingsUpdate(BaseModel):
+    max_cache_gb: float
