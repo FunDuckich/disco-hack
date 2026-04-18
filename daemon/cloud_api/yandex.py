@@ -1,10 +1,10 @@
-# daemon/cloud_api/yandex.py
-import yadisk
 import logging
+
+import yadisk
+
 
 class YandexDiskAsyncClient:
     def __init__(self, token: str):
-        # Используем АСИНХРОННОГО клиента!
         self.client = yadisk.AsyncClient(token=token)
 
     async def check_connection(self):
@@ -13,8 +13,6 @@ class YandexDiskAsyncClient:
             logging.error("Токен Яндекса недействителен!")
         return is_valid
 
-    # ВАЖНО: Метод называется именно download, так как ребята 
-    # в core/vfs.py вызывают await self.cloud_api.download(...)
     async def download(self, remote_path: str, local_path: str):
         logging.info(f"[Yandex API] Скачиваю из облака: {remote_path}")
         try:
@@ -24,21 +22,43 @@ class YandexDiskAsyncClient:
             logging.error(f"[Yandex API] Ошибка скачивания {remote_path}: {e}")
             raise e
 
-    # Этот метод понадобится для importer.py
+    async def get_meta(self, remote_path: str):
+        return await self.client.get_meta(remote_path)
+
+    async def listdir_metadata(self, remote_path: str) -> list[dict]:
+        out: list[dict] = []
+        async for item in self.client.listdir(remote_path, limit=1000):
+            out.append({
+                "path": item.path,
+                "type": "dir" if item.type == "dir" else "file",
+                "name": item.name,
+                "size": item.size or 0,
+                "revision": getattr(item, "revision", None),
+            })
+        return out
+
+    async def get_last_uploaded_resources(self, limit: int = 50) -> list:
+        return await self.client.get_last_uploaded(limit=limit)
+
     async def get_all_files_flat(self) -> list:
-        logging.info("[Yandex API] Получаю дерево файлов...")
-        result = []
-        try:
-            # Получаем все файлы рекурсивно (flat=True)
-            # Это может занять время, если файлов много
-            async for item in self.client.listdir("disk:/", limit=10000):
+        logging.info("[Yandex API] Получаю дерево файлов (рекурсивный обход)...")
+        result: list[dict] = []
+
+        async def visit(remote_dir: str) -> None:
+            async for item in self.client.listdir(remote_dir, limit=1000):
                 result.append({
                     "path": item.path,
                     "type": "dir" if item.type == "dir" else "file",
                     "name": item.name,
                     "size": item.size or 0,
-                    "revision": item.revision
+                    "revision": getattr(item, "revision", None),
                 })
+                if item.type == "dir":
+                    await visit(item.path)
+
+        try:
+            await visit("disk:/")
+            logging.info("[Yandex API] Всего записей в индексе: %s", len(result))
             return result
         except Exception as e:
             logging.error(f"[Yandex API] Ошибка получения структуры: {e}")
