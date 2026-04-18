@@ -61,9 +61,23 @@ if [[ ! -f "$SPEC" ]]; then
   exit 1
 fi
 
-if command -v dos2unix >/dev/null 2>&1; then
-  dos2unix "$SPEC" 2>/dev/null || true
-fi
+# Копия spec в SPECS: убираем UTF-8 BOM и CRLF (иначе rpmbuild на ALT: «не похож на файл спецификации»).
+prepare_spec_in_rpmtree() {
+  local dest="$RPM_TOP/SPECS/cloudfusion.spec"
+  mkdir -p "$RPM_TOP/SPECS"
+  python3 - "$SPEC" "$dest" <<'PY'
+import pathlib, sys
+src, dest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+data = src.read_bytes()
+if data.startswith(b"\xef\xbb\xbf"):
+    data = data[3:]
+data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+if not data.endswith(b"\n"):
+    data += b"\n"
+dest.write_bytes(data)
+PY
+  echo "Spec для rpmbuild: $dest"
+}
 
 if [[ ! -f daemon/.env ]]; then
   if [[ -f daemon/.env.example ]]; then
@@ -116,13 +130,16 @@ install -m0644 "$ROOT/integration/desktop/cloudfusion-app.desktop" "$RPM_TOP/SOU
 echo "SOURCES:"
 ls -la "$RPM_TOP/SOURCES/"
 
+prepare_spec_in_rpmtree
+
 if [[ "$ONLY_SOURCES" -eq 1 ]]; then
-  echo "Готово (--only-sources). Дальше вручную: rpmbuild -ba \"$SPEC\""
+  echo "Готово (--only-sources). Дальше:"
+  echo "  rpmbuild -ba --define \"_topdir $RPM_TOP\" \"$RPM_TOP/SPECS/cloudfusion.spec\""
   exit 0
 fi
 
 echo "== 5/5 rpmbuild -ba =="
-rpmbuild -ba --define "_topdir $RPM_TOP" "$SPEC"
+rpmbuild -ba --define "_topdir $RPM_TOP" "$RPM_TOP/SPECS/cloudfusion.spec"
 
 echo "Готово. Пакет:"
 find "$RPM_TOP/RPMS" -maxdepth 3 -name 'cloudfusion-*.rpm' -print 2>/dev/null || true

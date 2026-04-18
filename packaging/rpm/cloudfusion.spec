@@ -6,7 +6,7 @@
 Name:           cloudfusion
 Version:        0.1.0
 Release:        1%{?dist}
-Summary:        CloudFusion — облачный диск и интеграция с Dolphin
+Summary:        CloudFusion - cloud disk and Dolphin integration
 License:        MIT
 URL:            https://github.com/FunDuckich/disco-hack
 Source0:        cloudfusion
@@ -19,8 +19,7 @@ BuildArch:      x86_64
 
 # FUSE для pyfuse3 в демоне; на части дистрибутивов пакет называется libfuse3 — при необходимости добавьте в Requires.
 Requires:       fuse3
-# Опционально для уведомлений из share_bridge; не строго обязательно (есть fallback на kdialog).
-Recommends:     libnotify
+# libnotify optional for share_bridge (kdialog fallback); omit Recommends for older rpmbuild.
 
 %description
 CloudFusion: демон FastAPI (PyInstaller), нативное приложение Tauri, пункт сервисного меню Dolphin
@@ -60,5 +59,5 @@ echo "CloudFusion установлен. Перезапустите Dolphin, чт
 %{_datadir}/applications/cloudfusion-app.desktop
 
 %changelog
-* Thu Apr 18 2026 CloudFusion Packaging <packaging@local> - 0.1.0-1
-- Первоначальный spec: Tauri, демон, KIO, ярлык.
+* Sat Apr 18 2026 CloudFusion Packaging <packaging@local> - 0.1.0-1
+- Initial spec: Tauri, daemon, KIO, desktop files.

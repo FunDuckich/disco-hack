@@ -39,13 +39,13 @@
 
 1. Опционально **`--pull`**: **`git pull --ff-only`** в РЕПО.
 2. Проверяет в `PATH`: **`git`**, **`python3`**, **`node`**, **`npm`**, **`cargo`**, **`rpmbuild`**.
-3. При наличии **`dos2unix`** — переводы строк в [`cloudfusion.spec`](cloudfusion.spec).
-4. При отсутствии **`daemon/.env`** — копия из **`daemon/.env.example`** (заполните **`YANDEX_*`** для запуска демона).
-5. **`npm install`** (пропуск: **`--skip-npm`**).
-6. **`npm run tauri build`** (Vite пишет во **`dist/`**).
-7. **[`build-linux-daemon.sh`](../../scripts/build-linux-daemon.sh)** — PyInstaller кладёт бинарь в **`build/daemon-release/cloudfusion-daemon`**, не в **`dist/`**, чтобы фронт его не затёр.
-8. Копирование пяти файлов в **`$RPMBUILD_TOPDIR/SOURCES`**.
-9. **`rpmbuild -ba --define "_topdir …"`** → **`$RPMBUILD_TOPDIR/RPMS/`**.
+3. При отсутствии **`daemon/.env`** — копия из **`daemon/.env.example`** (заполните **`YANDEX_*`** для запуска демона).
+4. **`npm install`** (пропуск: **`--skip-npm`**).
+5. **`npm run tauri build`** (Vite пишет во **`dist/`**).
+6. **[`build-linux-daemon.sh`](../../scripts/build-linux-daemon.sh)** — PyInstaller кладёт бинарь в **`build/daemon-release/cloudfusion-daemon`**, не в **`dist/`**, чтобы фронт его не затёр.
+7. Копирование пяти файлов в **`$RPMBUILD_TOPDIR/SOURCES`**.
+8. Нормализованная копия [`cloudfusion.spec`](cloudfusion.spec) в **`$RPMBUILD_TOPDIR/SPECS/`** (без UTF-8 BOM и CRLF — иначе на ALT **`rpmbuild`** часто пишет «не похож на файл спецификации»).
+9. **`rpmbuild -ba --define "_topdir …" …/SPECS/cloudfusion.spec`** → **`$RPMBUILD_TOPDIR/RPMS/`**.
 
 **Дополнительно**
 
@@ -320,10 +320,30 @@ ls -la ~/rpmbuild/SOURCES/
 
 ### Шаг 7. `rpmbuild`
 
-Явный **`_topdir`** совпадает с тем, что делает скрипт сборки:
+Явный **`_topdir`** и spec из **`SPECS/`** (так надёжнее для ALT, чем путь из git-клона):
 
 ```bash
-rpmbuild -ba --define "_topdir $HOME/rpmbuild" packaging/rpm/cloudfusion.spec
+mkdir -p ~/rpmbuild/SPECS
+```
+
+```bash
+python3 <<'PY'
+from pathlib import Path
+src = Path("packaging/rpm/cloudfusion.spec")
+dst = Path.home() / "rpmbuild/SPECS/cloudfusion.spec"
+dst.parent.mkdir(parents=True, exist_ok=True)
+b = src.read_bytes()
+if b.startswith(b"\xef\xbb\xbf"):
+    b = b[3:]
+b = b.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+if not b.endswith(b"\n"):
+    b += b"\n"
+dst.write_bytes(b)
+PY
+```
+
+```bash
+rpmbuild -ba --define "_topdir $HOME/rpmbuild" "$HOME/rpmbuild/SPECS/cloudfusion.spec"
 ```
 
 ```bash
@@ -353,7 +373,7 @@ kquitapp5 dolphin
 | `javascriptcoregtk-4.1` / `No package 'javascriptcoregtk-4.1' found` | На **ALT p11**: **`libwebkit2gtk4.1-devel`**. Имена вроде **`libwebkit2gtk-4.1-dev`** — это **Debian/Ubuntu**. |
 | `failed to run linuxdeploy` / `mtr-packet` | В актуальном репозитории **AppImage** отключён в **`tauri.conf.json`**. Обновите клон или уберите **AppImage** из **`bundle.targets`**. |
 | `install: ... cloudfusion-daemon: Нет такого файла` | Собирайте демон **после** **`npm run tauri build`** или пользуйтесь **`./build-rpm.sh`**. Бинарь: **`build/daemon-release/cloudfusion-daemon`** (не **`dist/`**). |
-| `Файл ... cloudfusion.spec не похож на файл спецификации` | Часто **CRLF**: **`dos2unix packaging/rpm/cloudfusion.spec`**, проверка **`file`** / **`head`**. |
+| `Файл ... cloudfusion.spec не похож на файл спецификации` | **CRLF / UTF-8 BOM** в spec из клона с Windows, или **неверный день недели** в **`%changelog`**. Скрипт **`./build-rpm.sh`** сам кладёт нормализованный spec в **`~/rpmbuild/SPECS/`**. Вручную: см. **шаг 7** (блок с **`python3`** выше) или **`dos2unix packaging/rpm/cloudfusion.spec`**. |
 | `rpmbuild: command not found` | Пакет **`rpm-build`** (или аналог в вашем дистрибутиве). |
 
 В [`cloudfusion.spec`](cloudfusion.spec) при необходимости поправьте **`Requires:`** для FUSE под имя пакета вашего дистрибутива.
