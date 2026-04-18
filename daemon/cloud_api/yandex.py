@@ -32,7 +32,10 @@ class YandexDiskAsyncClient:
         await self.client.move(src_path, dst_path, wait=True, overwrite=overwrite)
 
     async def upload_local_file(self, local_path: str, remote_path: str):
-        await self.client.upload(local_path, remote_path, wait=True)
+        # overwrite=True: повторное сохранение (Kate/Dolphin) иначе 409 «уже существует».
+        await self.client.upload(
+            local_path, remote_path, wait=True, overwrite=True
+        )
 
     async def get_meta(self, remote_path: str):
         return await self.client.get_meta(remote_path)
