@@ -1,13 +1,12 @@
 import yadisk
 
+from config import settings
+
 
 class YandexAuthenticator:
-    # Эти ключи общие для всего приложения
-    CLIENT_ID = "92b225afdfb54df1ba7f18c13597d16b"
-    CLIENT_SECRET = "95c9d7aad4d6446aacc827c38e9ad491"
-
-    # URL, который слушает ваш локальный FastAPI сервер
-    REDIRECT_URI = "http://localhost:8000/callback"
+    CLIENT_ID = settings.yandex_client_id
+    CLIENT_SECRET = settings.yandex_client_secret
+    REDIRECT_URI = settings.yandex_redirect_uri
 
     @classmethod
     def get_auth_client(cls):
