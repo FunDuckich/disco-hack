@@ -1,0 +1,4 @@
+# Optional full lock for CI: regenerate with
+#   pip install -r daemon/requirements-build.txt
+#   pip freeze > daemon/requirements.lock.txt
+# Committed pins in requirements.txt are the source of truth for runtime.

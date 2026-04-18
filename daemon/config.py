@@ -6,11 +6,18 @@ from pydantic import BaseModel
 load_dotenv()
 
 
+def default_db_path() -> str:
+    """Absolute SQLite path under XDG_DATA_HOME (stable for PyInstaller / sidecar)."""
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    base = xdg if xdg else os.path.expanduser("~/.local/share")
+    return os.path.join(base, "cloudfusion", "cloudfusion.db")
+
+
 class Settings(BaseModel):
     cache_dir: str = "~/.cache/cloud-fusion/"
     max_cache_gb: int = 5
     mountpoint: str = "~/CloudFusion"
-    db_path: str = "cloudfusion.db"
+    db_path: str
     enable_fuse: bool = False
     yandex_client_id: str
     yandex_client_secret: str
@@ -30,7 +37,7 @@ def _load() -> Settings:
             cache_dir=os.getenv("CACHE_DIR", "~/.cache/cloud-fusion/"),
             max_cache_gb=int(os.getenv("MAX_CACHE_GB", "5")),
             mountpoint=os.getenv("MOUNTPOINT", "~/CloudFusion"),
-            db_path=os.getenv("DB_PATH", "cloudfusion.db"),
+            db_path=os.getenv("DB_PATH") or default_db_path(),
             enable_fuse=_env_bool("ENABLE_FUSE", False),
             yandex_client_id=os.environ["YANDEX_CLIENT_ID"],
             yandex_client_secret=os.environ["YANDEX_CLIENT_SECRET"],
