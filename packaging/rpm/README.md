@@ -2,6 +2,20 @@
 
 **РЕПО** — каталог с клоном `disco-hack` (корень репозитория). Дальше все команды сборки выполняйте **из РЕПО** после `cd` в него.
 
+### Одной командой (после установки пакетов ОС)
+
+Из **РЕПО** (системные зависимости — в разделе ниже; `daemon/.env` скрипт создаст из примера, если файла нет):
+
+```bash
+chmod +x scripts/build-cloudfusion-rpm.sh
+```
+
+```bash
+./scripts/build-cloudfusion-rpm.sh
+```
+
+Повторная сборка без `npm install`: `./scripts/build-cloudfusion-rpm.sh --skip-npm`. Только заполнить `~/rpmbuild/SOURCES` без `rpmbuild`: `--only-sources`. Другой каталог RPM: `RPMBUILD_TOPDIR=/tmp/rpmbuild ./scripts/build-cloudfusion-rpm.sh`.
+
 ---
 
 ## Сначала: пакеты на машине **сборщика** (одна ОС — один блок)
