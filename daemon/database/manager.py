@@ -127,6 +127,51 @@ class DBManager:
         await db.commit()
         return new_id
 
+    async def get_nextcloud_root_wrapper_id(self) -> int | None:
+        db = await self.get_db()
+        cur = await db.execute(
+            "SELECT id FROM files WHERE cloud_type = 'nextcloud' AND remote_path = 'nextcloud:/' LIMIT 1"
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else None
+
+    async def ensure_nextcloud_root_folder(self) -> int:
+        """Корневая папка Nextcloud в БД (remote_path = nextcloud:/), аналог disk:/ для Яндекса."""
+        db = await self.get_db()
+        wid = await self.get_nextcloud_root_wrapper_id()
+        if wid is not None:
+            await db.execute(
+                """
+                UPDATE files SET parent_id = ?
+                WHERE cloud_type = 'nextcloud' AND parent_id IS NULL AND id != ?
+                """,
+                (wid, wid),
+            )
+            await db.commit()
+            return wid
+
+        stored_rev = await self.get_config("nextcloud_root_folder_revision") or ""
+
+        cur = await db.execute(
+            """
+            INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag, status)
+            VALUES (NULL, 'Nextcloud', 1, 0, 'nextcloud', 'nextcloud:/', ?, 'stub')
+            RETURNING id
+            """,
+            (stored_rev,),
+        )
+        row = await cur.fetchone()
+        new_id = int(row[0])
+        await self._fts_insert_row(db, new_id, "Nextcloud")
+        await db.execute(
+            """
+            UPDATE files SET parent_id = ?
+            WHERE cloud_type = 'nextcloud' AND parent_id IS NULL AND id != ?
+            """,
+            (new_id, new_id),
+        )
+        await db.commit()
+        return new_id
 
     async def set_config(self, key: str, value: str):
         db = await self.get_db()
@@ -292,9 +337,10 @@ class DBManager:
             await db.execute(q, ids)
         await db.commit()
 
-    async def insert_yandex_child(
+    async def insert_cloud_child(
         self,
         *,
+        cloud_type: str,
         parent_id: int | None,
         name: str,
         is_dir: bool,
@@ -308,7 +354,7 @@ class DBManager:
         cur = await db.execute(
             """
             INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag, status, local_path)
-            VALUES (?, ?, ?, ?, 'yandex', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
             """,
             (
@@ -316,6 +362,7 @@ class DBManager:
                 name,
                 1 if is_dir else 0,
                 size,
+                cloud_type,
                 remote_path,
                 etag,
                 status,
@@ -327,6 +374,30 @@ class DBManager:
         await self._fts_insert_row(db, rid, name)
         await db.commit()
         return rid
+
+    async def insert_yandex_child(
+        self,
+        *,
+        parent_id: int | None,
+        name: str,
+        is_dir: bool,
+        remote_path: str,
+        size: int = 0,
+        status: str = "stub",
+        etag: str = "",
+        local_path: str | None = None,
+    ) -> int:
+        return await self.insert_cloud_child(
+            cloud_type="yandex",
+            parent_id=parent_id,
+            name=name,
+            is_dir=is_dir,
+            remote_path=remote_path,
+            size=size,
+            status=status,
+            etag=etag,
+            local_path=local_path,
+        )
 
     async def delete_file_row_yandex(self, file_id: int) -> None:
         db = await self.get_db()

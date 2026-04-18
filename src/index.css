@@ -1,21 +1,41 @@
 @import "tailwindcss";
 
 @theme {
+  --color-retro-bg: #EDEEF0;
+  --color-retro-dark: #2D2D2D;
+  --color-retro-yellow: #DEDDDA;
+  --color-retro-pink: #D1D1D1;
+  --color-retro-red: #E01B24;
+  --color-retro-purple: #3584E4;
+  --color-retro-green: #26A269;
+  --color-retro-blue: #1C71D8;
+  
+  --shadow-retro: 0px 2px 8px rgba(0, 0, 0, 0.08);
+  --radius-retro: 12px;
+  --border-w-retro: 1px;
+}
+
+.disco-theme {
+  --color-retro-bg: #F4F2ED;
+  --color-retro-dark: #1A1A1A;
   --color-retro-yellow: #FFC567;
   --color-retro-pink: #FB7DA8;
   --color-retro-red: #FD5A46;
   --color-retro-purple: #552CB7;
   --color-retro-green: #00995E;
   --color-retro-blue: #058CD7;
-  --color-retro-bg: #F4F2ED; 
-  --color-retro-dark: #1A1A1A;
   
   --shadow-retro: 4px 4px 0px 0px rgba(26, 26, 26, 1);
-  --shadow-retro-hover: 2px 2px 0px 0px rgba(26, 26, 26, 1);
+  --radius-retro: 0px;
+  --border-w-retro: 2px;
 }
 
 @layer base {
   body {
-    @apply bg-retro-bg text-retro-dark;
+    @apply bg-retro-bg text-retro-dark transition-colors duration-300;
+  }
+
+  .retro-border {
+    border: var(--border-w-retro) solid var(--color-retro-dark);
   }
 }
