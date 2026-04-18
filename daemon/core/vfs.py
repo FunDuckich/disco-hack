@@ -113,7 +113,13 @@ class CloudFusionVFS(pyfuse3.Operations):
             os.makedirs(cache_dir, exist_ok=True)
             local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
 
-            await self.cloud_api.download(row['remote_path'], local_path)
+            cloud_type = row['cloud_type']
+            target_client = self.active_clients.get(cloud_type)
+
+            if not target_client:
+                raise pyfuse3.FUSEError(errno.EIO)
+
+            await target_client.download(row['remote_path'], local_path)
 
             await self.db_manager.update_downloaded_file(db_id, local_path)
 
