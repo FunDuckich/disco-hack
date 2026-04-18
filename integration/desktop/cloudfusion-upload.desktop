@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+MimeType=all/all;
+Actions=SendToYandex;SendToNextcloud;
+X-KDE-Priority=TopLevel
+X-KDE-Submenu=CloudFusion
+Icon=cloud
+
+[Desktop Action SendToYandex]
+Name=Yandex
+Icon=folder-yandex
+Exec=cp "%f" "$HOME/CloudFusion/Yandex/"
+
+[Desktop Action SendToNextcloud]
+Name=Nextcloud
+Icon=folder-nextcloud
+Exec=cp "%f" "$HOME/CloudFusion/Nextcloud/"

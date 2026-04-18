@@ -4,6 +4,7 @@ import os
 import pyfuse3
 import pyfuse3.asyncio
 
+from database.upload_manager import upload_queue
 from ..cloud_api.nextcloud import NextcloudAsyncClient
 from ..cloud_api.yandex import YandexDiskAsyncClient
 from ..config import settings
@@ -109,6 +110,17 @@ async def start_cloud_fusion():
         pyfuse3.close()
         logging.info("Диск отмонтирован.")
 
+async def recover_pending_uploads(db_manager):
+    pending_files = await db_manager.get_files_by_status('pending')
+    for f in pending_files:
+        upload_queue.put_nowait({
+            'inode': f['id'],
+            'local_path': f['local_cache_path'],
+            'remote_path': f['remote_path'],
+            'cloud_type': f['cloud_type']
+        })
+    if pending_files:
+        logging.info(f"Восстановлено загрузок после сбоя: {len(pending_files)}")
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
