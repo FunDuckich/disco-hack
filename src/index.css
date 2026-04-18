@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --color-retro-bg: #EDEEF0;
+  --color-retro-bg: #ffffff;
   --color-retro-dark: #2D2D2D;
   --color-retro-yellow: #DEDDDA;
   --color-retro-pink: #D1D1D1;
@@ -9,9 +9,8 @@
   --color-retro-purple: #3584E4;
   --color-retro-green: #26A269;
   --color-retro-blue: #1C71D8;
-  
   --shadow-retro: 0px 2px 8px rgba(0, 0, 0, 0.08);
-  --radius-retro: 12px;
+  --radius-retro: 3px;
   --border-w-retro: 1px;
 }
 
