@@ -127,6 +127,51 @@ class DBManager:
         await db.commit()
         return new_id
 
+    async def get_nextcloud_root_wrapper_id(self) -> int | None:
+        db = await self.get_db()
+        cur = await db.execute(
+            "SELECT id FROM files WHERE cloud_type = 'nextcloud' AND remote_path = 'nextcloud:/' LIMIT 1"
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else None
+
+    async def ensure_nextcloud_root_folder(self) -> int:
+        """Корневая папка Nextcloud в БД (remote_path = nextcloud:/), аналог disk:/ для Яндекса."""
+        db = await self.get_db()
+        wid = await self.get_nextcloud_root_wrapper_id()
+        if wid is not None:
+            await db.execute(
+                """
+                UPDATE files SET parent_id = ?
+                WHERE cloud_type = 'nextcloud' AND parent_id IS NULL AND id != ?
+                """,
+                (wid, wid),
+            )
+            await db.commit()
+            return wid
+
+        stored_rev = await self.get_config("nextcloud_root_folder_revision") or ""
+
+        cur = await db.execute(
+            """
+            INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag, status)
+            VALUES (NULL, 'Nextcloud', 1, 0, 'nextcloud', 'nextcloud:/', ?, 'stub')
+            RETURNING id
+            """,
+            (stored_rev,),
+        )
+        row = await cur.fetchone()
+        new_id = int(row[0])
+        await self._fts_insert_row(db, new_id, "Nextcloud")
+        await db.execute(
+            """
+            UPDATE files SET parent_id = ?
+            WHERE cloud_type = 'nextcloud' AND parent_id IS NULL AND id != ?
+            """,
+            (new_id, new_id),
+        )
+        await db.commit()
+        return new_id
 
     async def set_config(self, key: str, value: str):
         db = await self.get_db()
