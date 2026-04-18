@@ -75,6 +75,8 @@
 
 4. Готовый файл: **`~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm`** (или подкаталог `RPMS` вашего `_topdir`).
 
+5. **Проверка** (`rpm -qpl`, установка, `rpm -V`, запуск): отдельный раздел в [packaging/rpm/README.md](packaging/rpm/README.md).
+
 Тот же путь **вручную** (без скрипта) расписан в [packaging/rpm/README.md](packaging/rpm/README.md) шагами **1–8**.
 
 ### Уже есть готовый `.rpm`

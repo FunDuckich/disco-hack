@@ -63,6 +63,76 @@ RPMBUILD_TOPDIR=/tmp/my-rpm ./build-rpm.sh
 
 ---
 
+## Проверка: что сборка и установка сработали
+
+Раньше в инструкции этого не было: документация наращивалась вокруг ошибок **`rpmbuild`** и зависимостей ОС, блок про проверку не успели выделить. Ниже — минимальный чеклист.
+
+### После `./build-rpm.sh` (ещё на сборщике)
+
+Найти собранный пакет (путь по умолчанию **`~/rpmbuild`**; иначе ваш **`RPMBUILD_TOPDIR`**):
+
+```bash
+find ~/rpmbuild/RPMS -name 'cloudfusion-*.rpm' 2>/dev/null
+```
+
+Посмотреть, **какие файлы попадут в систему** при установке:
+
+```bash
+rpm -qpl ~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm
+```
+
+Зависимости пакета:
+
+```bash
+rpm -qp --requires ~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm
+```
+
+Если вместо RPM у вас только **`build/cloudfusion-*-linux-x86_64.tar.gz`** (запасной вариант при падении **`rpmbuild`**), проверьте состав:
+
+```bash
+tar tzf build/cloudfusion-*-linux-x86_64.tar.gz | head -40
+```
+
+### После `sudo rpm -Uvh …cloudfusion….rpm`
+
+Пакет зарегистрирован:
+
+```bash
+rpm -q cloudfusion
+```
+
+Целостность установленных файлов (пустой вывод — норма):
+
+```bash
+rpm -V cloudfusion
+```
+
+Файлы на месте:
+
+```bash
+test -x /usr/bin/cloudfusion && echo GUI_ok
+test -x /usr/libexec/cloudfusion/cloudfusion-daemon && echo daemon_ok
+test -f /usr/share/kio/servicemenus/cloudfusion-link.desktop && echo kio_ok
+```
+
+### Запуск и OAuth
+
+В **том же сеансе**, откуда запускаете окно, должны быть заданы **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (см. [`daemon/.env.example`](../../daemon/.env.example)). Затем:
+
+```bash
+/usr/bin/cloudfusion
+```
+
+Если Tauri поднимает демон сам, проверка API (опционально):
+
+```bash
+curl -sS http://127.0.0.1:8000/health
+```
+
+После установки или обновления KIO перезапустите Dolphin: **`kquitapp5 dolphin`**, снова откройте Dolphin — подробности в [`integration/README.md`](../../integration/README.md).
+
+---
+
 ## Сначала: пакеты на машине **сборщика** (одна ОС — один блок)
 
 Ниже **не смешивайте** блоки разных дистрибутивов. При необходимости отдельно поставьте **rustup**. Установка пакетов — под **root** (`su -` / `sudo`).
@@ -361,6 +431,8 @@ kquitapp5 dolphin
 ```
 
 Переменные **`YANDEX_*`** в сеансе пользователя; интеграция Dolphin: [`integration/README.md`](../../integration/README.md).
+
+Дальше — раздел **«Проверка: что сборка и установка сработали»** (он идёт в этом файле сразу после блока про **`./build-rpm.sh`**).
 
 ---
 
