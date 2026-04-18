@@ -44,8 +44,8 @@
 5. **`npm run tauri build`** (Vite пишет во **`dist/`**).
 6. **[`build-linux-daemon.sh`](../../scripts/build-linux-daemon.sh)** — PyInstaller кладёт бинарь в **`build/daemon-release/cloudfusion-daemon`**, не в **`dist/`**, чтобы фронт его не затёр.
 7. Копирование пяти файлов в **`$RPMBUILD_TOPDIR/SOURCES`**.
-8. Нормализованная копия [`cloudfusion.spec`](cloudfusion.spec) в **`$RPMBUILD_TOPDIR/SPECS/`** (без UTF-8 BOM и CRLF — иначе на ALT **`rpmbuild`** часто пишет «не похож на файл спецификации»).
-9. **`rpmbuild -ba --define "_topdir …" …/SPECS/cloudfusion.spec`** → **`$RPMBUILD_TOPDIR/RPMS/`**.
+8. **Встроенный** ASCII-spec в **`$RPMBUILD_TOPDIR/SPECS/cloudfusion.spec`** (не читается из git — обход BOM/CRLF и парсера на ALT).
+9. **`cd _topdir && LC_ALL=C rpmbuild -ba … SPECS/cloudfusion.spec`** → **`$RPMBUILD_TOPDIR/RPMS/`**; при ошибке **`rpmbuild`** дополнительно собирается **`build/cloudfusion-VERSION-linux-x86_64.tar.gz`**. Только архив, без RPM: **`./build-rpm.sh --tarball`**.
 
 **Дополнительно**
 
@@ -59,7 +59,7 @@
 RPMBUILD_TOPDIR=/tmp/my-rpm ./build-rpm.sh
 ```
 
-Справка: **`./build-rpm.sh --help`**.
+Справка: **`./build-rpm.sh --help`**. Флаги: **`--pull`**, **`--skip-npm`**, **`--only-sources`**, **`--tarball`**.
 
 ---
 
@@ -373,7 +373,7 @@ kquitapp5 dolphin
 | `javascriptcoregtk-4.1` / `No package 'javascriptcoregtk-4.1' found` | На **ALT p11**: **`libwebkit2gtk4.1-devel`**. Имена вроде **`libwebkit2gtk-4.1-dev`** — это **Debian/Ubuntu**. |
 | `failed to run linuxdeploy` / `mtr-packet` | В актуальном репозитории **AppImage** отключён в **`tauri.conf.json`**. Обновите клон или уберите **AppImage** из **`bundle.targets`**. |
 | `install: ... cloudfusion-daemon: Нет такого файла` | Собирайте демон **после** **`npm run tauri build`** или пользуйтесь **`./build-rpm.sh`**. Бинарь: **`build/daemon-release/cloudfusion-daemon`** (не **`dist/`**). |
-| `Файл ... cloudfusion.spec не похож на файл спецификации` | **CRLF / UTF-8 BOM** в spec из клона с Windows, или **неверный день недели** в **`%changelog`**. Скрипт **`./build-rpm.sh`** сам кладёт нормализованный spec в **`~/rpmbuild/SPECS/`**. Вручную: см. **шаг 7** (блок с **`python3`** выше) или **`dos2unix packaging/rpm/cloudfusion.spec`**. |
+| `Файл ... cloudfusion.spec не похож на файл спецификации` | Обновите скрипт: **`./build-rpm.sh`** генерирует spec в **`~/rpmbuild/SPECS/`** сам. Вручную из git-файла: **`dos2unix`**, см. **шаг 7**. Запасной вариант: **`./build-rpm.sh --tarball`** (без **`rpmbuild`**). |
 | `rpmbuild: command not found` | Пакет **`rpm-build`** (или аналог в вашем дистрибутиве). |
 
 В [`cloudfusion.spec`](cloudfusion.spec) при необходимости поправьте **`Requires:`** для FUSE под имя пакета вашего дистрибутива.

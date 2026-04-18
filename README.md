@@ -71,7 +71,7 @@
 
 Опционально сначала подтянуть коммиты: **`./build-rpm.sh --pull`** (нужен **`git`** и настроенный **`git pull`** для ветки).
 
-Порядок внутри скрипта: проверки инструментов → **`daemon/.env`** из примера при отсутствии → **`npm install`** → **`npm run tauri build`** → **[`scripts/build-linux-daemon.sh`](scripts/build-linux-daemon.sh)** (демон в **`build/daemon-release/`**, не в **`dist/`**) → **`SOURCES`** → нормализованный **`SPECS/cloudfusion.spec`** (без BOM/CRLF) → **`rpmbuild -ba`**. Флаги: **`--skip-npm`**, **`--only-sources`**, **`--pull`**, **`RPMBUILD_TOPDIR`**.
+Порядок внутри скрипта: проверки → **`daemon/.env`** при отсутствии → **`npm install`** → **`npm run tauri build`** → **[`scripts/build-linux-daemon.sh`](scripts/build-linux-daemon.sh)** (демон в **`build/daemon-release/`**) → **`SOURCES`** → **встроенный ASCII-spec** в **`SPECS/`** → **`LC_ALL=C rpmbuild`** из каталога **`_topdir`**. При падении **`rpmbuild`** дополнительно собирается **`build/cloudfusion-*-linux-x86_64.tar.gz`**. Флаги: **`--tarball`** (только архив), **`--skip-npm`**, **`--only-sources`**, **`--pull`**, **`RPMBUILD_TOPDIR`**.
 
 4. Готовый файл: **`~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm`** (или подкаталог `RPMS` вашего `_topdir`).
 
