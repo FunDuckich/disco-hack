@@ -1,16 +1,39 @@
 import logging
-
-from fastapi import APIRouter, HTTPException, Query
-
-from ..schemas import FileItem, PathSegment, PinResponse, SearchResult, SyncResponse
-from ...config import settings
-from ...database.manager import DBManager
-from ...cloud_api.yandex import YandexDiskAsyncClient
-from ...cloud_api.nextcloud import NextcloudAsyncClient
-from pydantic import BaseModel
 import os
 
+from fastapi import APIRouter, Body, HTTPException, Query
+from ..schemas import FileItem, PathSegment, PinResponse, SearchResult, SyncResponse
+from ...cloud_api.nextcloud import NextcloudAsyncClient
+from ...cloud_api.yandex import YandexDiskAsyncClient
+from ...config import settings
+from ...database.manager import DBManager
+
 log = logging.getLogger("cloudfusion")
+
+
+def _fuse_local_to_cloud_remote(local_abs: str, mount_abs: str) -> tuple[str, str]:
+    """
+    Путь в смонтированном FUSE → (cloud_type, remote_path как в SQLite).
+
+    Первый сегмент пути относительно точки монтирования — имя корневой папки
+    («YandexDisk» / «Nextcloud» из ensure_*), а не строка cloud_type.
+    """
+    rel = os.path.relpath(local_abs, mount_abs)
+    if rel in (".", os.curdir):
+        raise ValueError("path is the mount root")
+    parts = rel.split(os.sep)
+    root_name = parts[0]
+    tail = parts[1:] if len(parts) > 1 else []
+    tail_s = "/".join(tail)
+
+    key = root_name.lower()
+    if key in ("yandexdisk", "yandex"):
+        remote = f"disk:/{tail_s}" if tail_s else "disk:/"
+        return "yandex", remote
+    if key == "nextcloud":
+        remote = f"nextcloud:/{tail_s}" if tail_s else "nextcloud:/"
+        return "nextcloud", remote
+    raise ValueError(f"unknown top-level folder under mount: {root_name!r}")
 
 def make_router(db: DBManager) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["files"])
@@ -52,43 +75,53 @@ def make_router(db: DBManager) -> APIRouter:
         log.info("File %d marked for sync", file_id)
         return {"status": "syncing"}
 
-    from fastapi import Body
-
-
-    @router.post("/api/files/publish")
+    @router.post("/files/publish")
     async def publish_file(data: dict = Body(...)):
+        """Публичная ссылка по локальному пути внутри FUSE (Dolphin Service Menu)."""
         local_path = data.get("local_path")
         if not local_path:
-            return {"error": "No path provided"}
-        rel_path = os.path.relpath(local_path, os.path.expanduser(settings.mountpoint))
-        parts = rel_path.split(os.sep)
+            raise HTTPException(status_code=400, detail="local_path is required")
 
-        cloud_type = parts[0].lower()
-        cloud_path = "/" + "/".join(parts[1:])
+        mount_abs = os.path.realpath(os.path.expanduser(settings.mountpoint))
+        try:
+            local_abs = os.path.realpath(os.path.expanduser(local_path))
+        except OSError as e:
+            raise HTTPException(status_code=400, detail=f"invalid path: {e}") from e
 
-        file_info = await db.get_file_by_remote_path(cloud_path, cloud_type)
+        try:
+            cloud_type, remote_path = _fuse_local_to_cloud_remote(local_abs, mount_abs)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        row = await db.get_file_by_remote_path(remote_path, cloud_type)
+        if row is None:
+            raise HTTPException(status_code=404, detail="file not in index (sync FUSE first)")
+        if row.get("is_dir"):
+            raise HTTPException(status_code=400, detail="cannot publish a directory")
 
         try:
             if cloud_type == "yandex":
-                res = await yandex_client.publish(cloud_path)  # Метод возвращает public_url
-                public_url = res
-
+                token = await db.get_config("yandex_token")
+                if not token:
+                    raise HTTPException(status_code=503, detail="Yandex is not connected")
+                client = YandexDiskAsyncClient(token=token)
+                public_url = await client.publish(remote_path)
             elif cloud_type == "nextcloud":
-
-                share = await nc_client.nc.files.sharing.create_share(
-                    path=cloud_path,
-                    share_type=3  # 3 = PUBLIC_LINK
-                )
-                public_url = share.url
-
-            # 4. Отправка в Tauri
-            # Чтобы Tauri (Rust) узнал о событии, можно использовать WebSocket
-            # или если Tauri сам вызвал этот запрос, вернуть в ответе.
-            # Но для контекстного меню (внешний вызов) лучше emit через event bus.
+                nc_host = await db.get_config("nc_host")
+                nc_login = await db.get_config("nc_login")
+                nc_password = await db.get_config("nc_password")
+                if not (nc_host and nc_login and nc_password):
+                    raise HTTPException(status_code=503, detail="Nextcloud is not connected")
+                client = NextcloudAsyncClient(nc_host, nc_login, nc_password)
+                public_url = await client.publish(remote_path)
+            else:
+                raise HTTPException(status_code=500, detail="unsupported cloud_type")
 
             return {"status": "ok", "url": public_url}
-
+        except HTTPException:
+            raise
         except Exception as e:
-            return {"status": "error", "detail": str(e)}
+            log.exception("publish failed for %s", remote_path)
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     return router
