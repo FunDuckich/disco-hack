@@ -42,6 +42,16 @@ const apiFetch = async (endpoint, method = "GET", body = null) => {
   }
 };
 
+/** OAuth в системном браузере: в Tauri `window.open` часто бесполезен. */
+async function openExternal(url) {
+  if (isTauriShell) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 const App = () => {
   // Состояния из обоих компонентов
   const [view, setView] = useState('main'); 
@@ -58,8 +68,39 @@ const App = () => {
 
   // Статические данные для оформления (цвета и иконки) из Первого компонента
   const cloudUIData = {
-    YANDEX: { color: 'bg-retro-yellow', ping: '42ms' },
-    NEXTCLOUD: { color: 'bg-retro-blue', ping: '115ms' }
+    YANDEX: { color: "bg-retro-yellow" },
+    NEXTCLOUD: { color: "bg-retro-blue" },
+  };
+
+  const connectCloud = async (key) => {
+    if (!isBackendLive) return;
+    if (key === "YANDEX") {
+      await openExternal(`${API_BASE}/api/auth/login?provider=YANDEX`);
+      return;
+    }
+    if (key === "NEXTCLOUD") {
+      const host = window.prompt("URL сервера Nextcloud", "https://");
+      if (!host?.trim()) return;
+      try {
+        const res = await backendFetch(`${API_BASE}/api/auth/nextcloud/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ host: host.trim() }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          window.alert(
+            typeof data.detail === "string"
+              ? data.detail
+              : JSON.stringify(data.detail ?? data),
+          );
+          return;
+        }
+        if (data.login_url) await openExternal(data.login_url);
+      } catch (e) {
+        window.alert(e?.message || String(e));
+      }
+    }
   };
 
   // Обновление данных (Логика из Второго компонента)
@@ -118,11 +159,15 @@ const App = () => {
       <section onMouseDown={e => e.stopPropagation()} className="mb-6 space-y-4">
         {Object.keys(cloudStatus).map((key) => {
           const isLinked = cloudStatus[key];
-          const ui = cloudUIData[key] || { color: 'bg-retro-purple', ping: '???' };
-          const stats = realStats ? (realStats[key] || realStats) : null;
-          
-          // Расчет процентов для прогресс-бара
-          const percent = stats ? Math.round((stats.used_space / stats.total_space) * 100) : 0;
+          const ui = cloudUIData[key] || { color: "bg-retro-purple" };
+          const stats = realStats ? realStats[key] || realStats : null;
+          const percent =
+            stats &&
+            stats.total_space > 0 &&
+            Number.isFinite(stats.used_space) &&
+            Number.isFinite(stats.total_space)
+              ? Math.min(100, Math.round((stats.used_space / stats.total_space) * 100))
+              : 0;
 
           return (
             <div key={key} className={`${retroBox} ${isLinked ? ui.color : 'bg-white/50 border-dashed'} p-4 flex items-center justify-between`}>
@@ -131,7 +176,11 @@ const App = () => {
                   <div className="flex flex-col gap-1 cursor-help" title={`Хранилище ${key}`}>
                     <span className="font-black text-sm uppercase tracking-tight">{key}.DISK</span>
                     <span className="text-[10px] font-bold bg-white/40 px-1 border border-retro-dark w-fit">
-                      {stats ? `${(stats.used_space / 1024**3).toFixed(1)}GB / ${(stats.total_space / 1024**3).toFixed(0)}GB` : 'Загрузка...'}
+                      {stats &&
+                      Number.isFinite(stats.used_space) &&
+                      Number.isFinite(stats.total_space)
+                        ? `${(stats.used_space / 1024 ** 3).toFixed(1)}GB / ${(stats.total_space / 1024 ** 3).toFixed(0)}GB`
+                        : "—"}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -148,9 +197,10 @@ const App = () => {
                   </div>
                 </>
               ) : (
-                <button 
+                <button
+                  type="button"
                   disabled={!isBackendLive}
-                  onClick={() => window.open(`${API_BASE}/api/auth/login?provider=${key}`, '_blank')}
+                  onClick={() => connectCloud(key)}
                   className="w-full py-2 flex items-center justify-center gap-3 group disabled:opacity-30"
                 >
                   <span className="font-black text-sm uppercase">Подключить {key}</span>
@@ -171,16 +221,17 @@ const App = () => {
           <span className="bg-white px-3 py-1 retro-border font-black text-sm italic shadow-sm">{cacheLimit} GB</span>
         </div>
         
-        <input 
-          type="range" 
-          min="1"            // Минимальное смещение 1 ГБ
-          max="100"          // Максимум (можешь поставить 200 или 500)
-          step="1"           // Шаг перемещения — строго 1 ГБ
-          value={cacheLimit} 
-          onChange={(e) => updateCacheLimit(parseInt(e.target.value))}
+        <input
+          type="range"
+          min="1"
+          max="500"
+          step="1"
+          value={Math.min(500, Math.max(1, cacheLimit))}
+          onChange={(e) => updateCacheLimit(parseInt(e.target.value, 10))}
           className="w-full h-10 appearance-none bg-white retro-border cursor-pointer accent-retro-purple"
-          // Эта строка закрашивает полоску прогресса (делим на max значение, тут 100)
-          style={{ backgroundImage: `linear-gradient(to right, var(--color-retro-purple) ${cacheLimit}%, transparent ${cacheLimit}%)` }}
+          style={{
+            backgroundImage: `linear-gradient(to right, var(--color-retro-purple) ${Math.min(100, (Math.min(500, Math.max(1, cacheLimit)) / 500) * 100)}%, transparent 0)`,
+          }}
         />
       </section>
 
@@ -196,11 +247,28 @@ const App = () => {
   );
 
   const renderStats = () => {
-    const currentStats = realStats ? (realStats[activeCloud] || realStats) : null;
-    const hasData = !!currentStats;
-    
-    const efficiency = hasData && currentStats.total_files_count > 0
-      ? Math.round((currentStats.cached_files_count / currentStats.total_files_count) * 100)
+    const currentStats = realStats
+      ? realStats[activeCloud] || realStats
+      : null;
+    const hasData =
+      !!currentStats &&
+      currentStats.total_space > 0 &&
+      Number.isFinite(currentStats.used_space) &&
+      Number.isFinite(currentStats.total_space);
+
+    const tf = currentStats?.total_files_count;
+    const cf = currentStats?.cached_files_count;
+    const efficiency =
+      hasData &&
+      typeof tf === "number" &&
+      tf > 0 &&
+      typeof cf === "number" &&
+      Number.isFinite(cf)
+        ? Math.min(100, Math.round((cf / tf) * 100))
+        : 0;
+
+    const barPct = hasData
+      ? Math.min(100, (currentStats.used_space / currentStats.total_space) * 100)
       : 0;
 
     return (
@@ -209,8 +277,8 @@ const App = () => {
           <button onClick={() => setView('main')} className={`${retroBox} bg-white px-4 py-2 font-black text-[10px] flex items-center gap-2 hover:bg-retro-yellow`}>
             <ArrowLeft size={14} /> НАЗАД
           </button>
-          <div className={`${retroBox} ${isBackendLive ? 'bg-retro-green' : 'bg-retro-red'} text-white px-3 py-2 text-[10px] font-black flex items-center gap-1 cursor-help`} title="Статус API">
-            <Globe size={12} /> {isBackendLive ? `PING: ${cloudUIData[activeCloud]?.ping || 'OK'}` : 'OFFLINE'}
+          <div className={`${retroBox} ${isBackendLive ? 'bg-retro-green' : 'bg-retro-red'} text-white px-3 py-2 text-[10px] font-black flex items-center gap-1 cursor-help`} title="Статус API (реальный пинг не измеряем)">
+            <Globe size={12} /> {isBackendLive ? "API OK" : "OFFLINE"}
           </div>
         </div>
 
@@ -227,14 +295,14 @@ const App = () => {
           <div className="flex justify-between items-end mb-3">
              <h2 className="font-black text-[10px] uppercase opacity-50 italic underline decoration-retro-purple tracking-tighter">Занято в облаке</h2>
              <span className="font-black text-xl leading-none">
-               {hasData ? `${(currentStats.used_space / (1024**3)).toFixed(1)}GB` : '--'} 
-               <span className="text-xs opacity-30"> / {hasData ? `${(currentStats.total_space / (1024**3)).toFixed(0)}GB` : '--'}</span>
+               {hasData ? `${(currentStats.used_space / (1024 ** 3)).toFixed(1)}GB` : "—"}
+               <span className="text-xs opacity-30"> / {hasData ? `${(currentStats.total_space / (1024 ** 3)).toFixed(0)}GB` : "—"}</span>
              </span>
           </div>
           <div className={`h-8 retro-border bg-retro-bg flex overflow-hidden p-1 ${!isDisco ? 'rounded-full' : ''}`}>
             <div 
               className={`h-full bg-retro-purple transition-all duration-1000 ${!isDisco ? 'rounded-full' : ''}`} 
-              style={{ width: `${hasData ? (currentStats.used_space / currentStats.total_space * 100) : 0}%` }}
+              style={{ width: `${barPct}%` }}
             ></div>
           </div>
         </section>
@@ -246,7 +314,9 @@ const App = () => {
             <Zap size={20} className="mb-2 text-retro-dark" />
             <div className="text-[10px] font-black uppercase mb-1 opacity-60">Кэш</div>
             <div className="text-2xl font-black italic text-retro-dark leading-none">
-              {hasData ? `${(currentStats.used_cache_size / (1024**2)).toFixed(1)} MB` : '0.0 MB'}
+              {currentStats && Number.isFinite(currentStats.used_cache_size)
+                ? `${(currentStats.used_cache_size / (1024 ** 2)).toFixed(1)} MB`
+                : "—"}
             </div>
           </div>
 
@@ -254,12 +324,14 @@ const App = () => {
     <FileText size={20} className="mb-2 text-retro-purple" />
     <div className="text-[10px] font-black uppercase mb-1 opacity-60">Файлы в кэше</div>
     <div className="text-2xl font-black text-retro-purple leading-none">
-      {hasData ? `${efficiency}%` : '--'}
+      {currentStats && Number.isFinite(currentStats.cached_files_count) ? `${efficiency}%` : "—"}
     </div>
     <div className="text-[8px] mt-1 opacity-40 font-bold uppercase">
-      {hasData 
-        ? `${currentStats.cached_files_count} из ${currentStats.total_files_count} объектов` 
-        : 'АНАЛИЗ...'}
+      {currentStats &&
+      Number.isFinite(currentStats?.cached_files_count) &&
+      Number.isFinite(currentStats?.total_files_count)
+        ? `${currentStats.cached_files_count} из ${currentStats.total_files_count} объектов`
+        : "—"}
     </div>
           </div>
         </div>

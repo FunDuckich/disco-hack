@@ -8,6 +8,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# На Windows иногда сохраняют requirements.txt в UTF-16 — pip на Linux падает.
+python3 "${ROOT}/scripts/fix-req-encoding.py"
+
 VENV="${ROOT}/.venv-build-daemon"
 rm -rf "${VENV}"
 python3 -m venv "${VENV}"

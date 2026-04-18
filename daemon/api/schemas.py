@@ -34,13 +34,22 @@ class StatsResponse(BaseModel):
     pinned_count: int
     cache_size: int
     max_size: int
+    indexed_bytes: int = 0
+    # Поля для дашборда (исторически ожидал фронт)
+    used_space: int = 0
+    total_space: int = 0
+    used_cache_size: int = 0
+    total_files_count: int = 0
+    cached_files_count: int = 0
 
 class PinResponse(BaseModel):
     status: str
 
 
 class AuthStatusResponse(BaseModel):
+    """connected — как раньше: только Яндекс (обратная совместимость)."""
     connected: bool
+    providers: dict[str, bool]
 
 
 class SyncResponse(BaseModel):

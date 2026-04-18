@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import webbrowser
 from contextlib import asynccontextmanager
 import httpx
 import uvicorn
@@ -144,14 +143,14 @@ async def start_nextcloud_auth(data: NextcloudInit):
             poll_token = nc_data['poll']['token']
             poll_endpoint = nc_data['poll']['endpoint']
 
-            # 2. Открываем браузер пользователю
-            webbrowser.open(login_url)
-
-            # 3. Запускаем фоновую задачу ожидания (polling)
-            # В реальности лучше не блокировать ответ, но для хакатона сойдет
+            # Браузер открывает клиент (Tauri opener / window.open), не webbrowser процесса демона.
             asyncio.create_task(poll_nextcloud_token(host, poll_endpoint, poll_token))
 
-            return {"status": "browser_opened", "message": "Пожалуйста, авторизуйтесь в браузере"}
+            return {
+                "status": "browser_opened",
+                "message": "Откройте login_url в браузере и завершите вход.",
+                "login_url": login_url,
+            }
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Не удалось связаться с сервером: {e}")

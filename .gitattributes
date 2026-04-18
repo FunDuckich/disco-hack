@@ -1,0 +1,4 @@
+# Файлы для pip: только UTF-8 + LF (иначе pip на Linux падает на UTF-16 / CRLF из Windows).
+daemon/requirements.txt text eol=lf
+daemon/requirements-build.txt text eol=lf
+daemon/requirements.lock.txt text eol=lf

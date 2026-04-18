@@ -164,6 +164,7 @@ pub fn run() {
 
   tauri::Builder::default()
     .plugin(tauri_plugin_http::init())
+    .plugin(tauri_plugin_opener::init())
     .on_window_event(|window, event| {
       #[cfg(target_os = "linux")]
       if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {

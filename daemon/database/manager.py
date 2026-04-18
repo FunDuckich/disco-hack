@@ -517,7 +517,8 @@ class DBManager:
                     COUNT(CASE WHEN is_dir = 0 AND status = 'cached' THEN 1 END) AS cached_count,
                     COUNT(CASE WHEN is_dir = 0 AND status = 'syncing' THEN 1 END) AS syncing_count,
                     COUNT(CASE WHEN is_dir = 0 AND is_pinned = 1 THEN 1 END) AS pinned_count,
-                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) AS cache_size
+                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) AS cache_size,
+                    COALESCE(SUM(CASE WHEN is_dir = 0 THEN size ELSE 0 END), 0) AS indexed_bytes
                 FROM files
             ''')
             return dict(await cursor.fetchone())
