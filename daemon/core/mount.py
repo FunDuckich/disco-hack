@@ -54,10 +54,15 @@ async def start_cloud_fusion():
             logging.error(f" Ошибка синхронизации {cloud_type}: {e}")
 
     vfs = CloudFusionVFS(db_manager, active_clients)
-    poll_task = asyncio.create_task(merge_last_uploaded_loop(db_manager, cloud_api))
+
+    yandex_client = active_clients.get("yandex")
+    poll_task = None
+
+    if yandex_client:
+        poll_task = asyncio.create_task(merge_last_uploaded_loop(db_manager, yandex_client))
+
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=cloudfusion')
-
 
     pyfuse3.asyncio.enable()
     pyfuse3.init(vfs, mountpoint, fuse_options)
@@ -69,11 +74,12 @@ async def start_cloud_fusion():
     except Exception as e:
         logging.error(f"Критическая ошибка FUSE: {e}")
     finally:
-        poll_task.cancel()
-        try:
-            await poll_task
-        except asyncio.CancelledError:
-            pass
+        if poll_task:
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
         pyfuse3.close()
         logging.info("Диск отмонтирован.")
 

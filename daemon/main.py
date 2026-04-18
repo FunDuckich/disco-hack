@@ -19,7 +19,7 @@ from .core.yandex_folder_sync import merge_last_uploaded, sync_yandex_folder_if_
 from .database.manager import DBManager
 from .config import settings
 from pydantic import BaseModel
-from ..cloud_api.nextcloud import NextcloudAsyncClient
+from .cloud_api.nextcloud import NextcloudAsyncClient
 
 class NextcloudInit(BaseModel):
     host: str
