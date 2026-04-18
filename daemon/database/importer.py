@@ -2,6 +2,8 @@ import logging
 
 import aiosqlite
 
+from ..cloud_api.paths import normalize_importer_tree_key
+
 _COMMIT_EVERY = 512
 
 
@@ -16,9 +18,7 @@ async def import_cloud_to_db(db_manager, cloud_files, cloud_type, path_to_id_see
 
     async with aiosqlite.connect(db_manager.db_path) as db:
         for idx, item in enumerate(cloud_files):
-            full_path = item['path'].replace('disk:', '').rstrip('/')
-            if not full_path.startswith('/'):
-                full_path = '/' + full_path
+            full_path = normalize_importer_tree_key(item["path"], cloud_type)
 
             parts = full_path.split('/')
             parent_path = "/".join(parts[:-1])

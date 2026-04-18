@@ -4,6 +4,7 @@ import yadisk
 
 
 class YandexDiskAsyncClient:
+    """Реализует контракт CloudStorageDriver (см. cloud_api.protocol)."""
     def __init__(self, token: str):
         self.client = yadisk.AsyncClient(token=token)
 
