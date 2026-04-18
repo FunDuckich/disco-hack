@@ -10,7 +10,6 @@ import {
 const appWindow = getCurrentWindow();
 const API_BASE = "http://127.0.0.1:8000";
 
-// Логика из Второго компонента: более надежный fetch с таймаутом
 const apiFetch = async (endpoint, method = 'GET', body = null) => {
   try {
     const controller = new AbortController();
@@ -29,7 +28,6 @@ const apiFetch = async (endpoint, method = 'GET', body = null) => {
 };
 
 const App = () => {
-  // Состояния из обоих компонентов
   const [view, setView] = useState('main'); 
   const [activeCloud, setActiveCloud] = useState('YANDEX');
   const [isDisco, setIsDisco] = useState(false); 
@@ -39,16 +37,13 @@ const App = () => {
   const [cloudStatus, setCloudStatus] = useState({ YANDEX: false, NEXTCLOUD: false });
   const [realStats, setRealStats] = useState(null);
 
-  // Константа стилей из Первого компонента
   const retroBox = "retro-border shadow-retro rounded-retro transition-all duration-200";
 
-  // Статические данные для оформления (цвета и иконки) из Первого компонента
   const cloudUIData = {
     YANDEX: { color: 'bg-retro-yellow', ping: '42ms' },
     NEXTCLOUD: { color: 'bg-retro-blue', ping: '115ms' }
   };
 
-  // Обновление данных (Логика из Второго компонента)
   const refreshAppData = async () => {
     const health = await apiFetch('/health');
     const isLive = !!health;
@@ -73,7 +68,6 @@ const App = () => {
   };
 
 const updateCacheLimit = async (newLimit) => {
-  // Теперь минимум 1 ГБ, максимум 500 ГБ
   if (newLimit < 1 || newLimit > 500) return; 
   setCacheLimit(newLimit);
   await apiFetch('/api/settings', 'POST', { cache_limit: newLimit });
@@ -94,7 +88,6 @@ const updateCacheLimit = async (newLimit) => {
 
   const renderMain = () => (
     <div className="flex flex-col h-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-      {/* Статус бэкенда (Стиль карточки из дизайна 1, логика из 2) */}
       <div className={`mb-6 p-2 ${retroBox} flex items-center justify-center gap-2 font-black text-[10px] ${isBackendLive ? 'bg-retro-green text-white' : 'bg-retro-red text-white animate-pulse'}`}>
         {isBackendLive ? <CheckCircle2 size={12}/> : <AlertCircle size={12}/>}
         STATUS: {isBackendLive ? 'BACKEND ONLINE' : 'BACKEND OFFLINE (WAITING...)'}
@@ -106,7 +99,6 @@ const updateCacheLimit = async (newLimit) => {
           const ui = cloudUIData[key] || { color: 'bg-retro-purple', ping: '???' };
           const stats = realStats ? (realStats[key] || realStats) : null;
           
-          // Расчет процентов для прогресс-бара
           const percent = stats ? Math.round((stats.used_space / stats.total_space) * 100) : 0;
 
           return (
@@ -152,19 +144,17 @@ const updateCacheLimit = async (newLimit) => {
           <h2 className="font-black text-[11px] uppercase flex items-center gap-2 cursor-help" title="Лимит папки ~/.cache/cloudfusion">
             <Database size={14}/> Лимит LRU кэша
           </h2>
-          {/* Оставили только отображение текущего числа */}
           <span className="bg-white px-3 py-1 retro-border font-black text-sm italic shadow-sm">{cacheLimit} GB</span>
         </div>
         
         <input 
           type="range" 
-          min="1"            // Минимальное смещение 1 ГБ
-          max="100"          // Максимум (можешь поставить 200 или 500)
-          step="1"           // Шаг перемещения — строго 1 ГБ
+          min="1"            
+          max="100"        
+          step="1"          
           value={cacheLimit} 
           onChange={(e) => updateCacheLimit(parseInt(e.target.value))}
           className="w-full h-10 appearance-none bg-white retro-border cursor-pointer accent-retro-purple"
-          // Эта строка закрашивает полоску прогресса (делим на max значение, тут 100)
           style={{ backgroundImage: `linear-gradient(to right, var(--color-retro-purple) ${cacheLimit}%, transparent ${cacheLimit}%)` }}
         />
       </section>
