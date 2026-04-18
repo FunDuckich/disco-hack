@@ -39,15 +39,26 @@ def _invalidate_inode_async(inode: int) -> None:
 
 
 class CloudFusionVFS(pyfuse3.Operations):
-    def __init__(self, db_manager, cloud_api):
+    def __init__(self, db_manager, active_clients: dict):
         super().__init__()
         self.db_manager = db_manager
-        self.cloud_api = cloud_api
+        self.active_clients = active_clients
         self.inode_2_dbid = {pyfuse3.ROOT_INODE: None}
         self.dbid_2_inode = {None: pyfuse3.ROOT_INODE}
         self.next_inode = pyfuse3.ROOT_INODE + 1
         self._next_write_fh = _WRITE_FH_BASE
         self._write_handles: dict[int, dict] = {}
+
+    def _client_for_cloud_type(self, cloud_type: str | None):
+        if not cloud_type:
+            return None
+        return self.active_clients.get(cloud_type)
+
+    def _yandex_client(self):
+        y = self.active_clients.get("yandex")
+        if not y:
+            raise pyfuse3.FUSEError(errno.EROFS)
+        return y
 
     def _alloc_write_fh(self) -> int:
         self._next_write_fh += 1
@@ -158,14 +169,19 @@ class CloudFusionVFS(pyfuse3.Operations):
                 break
 
         try:
-            asyncio.get_running_loop().create_task(
-                folder_sync_after_readdir(
-                    self.db_manager,
-                    self.cloud_api,
-                    inode,
-                    parent_db_id,
+            prow = None
+            if parent_db_id is not None:
+                prow = await self.db_manager.get_file_by_id(parent_db_id)
+            yandex = self.active_clients.get("yandex")
+            if yandex and prow and prow.get("cloud_type") == "yandex":
+                asyncio.get_running_loop().create_task(
+                    folder_sync_after_readdir(
+                        self.db_manager,
+                        yandex,
+                        inode,
+                        parent_db_id,
+                    )
                 )
-            )
         except RuntimeError:
             log.warning("[sync] нет активного event loop — фоновая синхронизация пропущена")
 
@@ -185,19 +201,18 @@ class CloudFusionVFS(pyfuse3.Operations):
                 os.makedirs(cache_dir, exist_ok=True)
                 local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
 
-            cloud_type = row['cloud_type']
-            target_client = self.active_clients.get(cloud_type)
-
-            if not target_client:
-                raise pyfuse3.FUSEError(errno.EIO)
-
-            await target_client.download(row['remote_path'], local_path)
-
+                cloud_type = row["cloud_type"]
+                target_client = self._client_for_cloud_type(cloud_type)
+                if not target_client:
+                    raise pyfuse3.FUSEError(errno.EIO)
+                await target_client.download(row["remote_path"], local_path)
                 await self.db_manager.update_downloaded_file(db_id, local_path)
 
             return pyfuse3.FileInfo(fh=inode)
 
         if accmode in (os.O_WRONLY, os.O_RDWR):
+            if row.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
             upload_dir = os.path.expanduser("~/.cache/cloud-fusion/uploads/")
             os.makedirs(upload_dir, exist_ok=True)
             temp = os.path.join(upload_dir, f"w-{db_id}-{os.getpid()}.part")
@@ -207,7 +222,10 @@ class CloudFusionVFS(pyfuse3.Operations):
             elif row.get("local_path") and os.path.isfile(row["local_path"]):
                 shutil.copy2(row["local_path"], temp)
             elif row["status"] == "stub":
-                await self.cloud_api.download(row["remote_path"], temp)
+                wc = self._client_for_cloud_type(row.get("cloud_type"))
+                if not wc:
+                    raise pyfuse3.FUSEError(errno.EIO)
+                await wc.download(row["remote_path"], temp)
             else:
                 open(temp, "wb").close()
 
@@ -231,9 +249,11 @@ class CloudFusionVFS(pyfuse3.Operations):
             prow = await self.db_manager.get_file_by_id(parent_id)
             if not prow or not prow["is_dir"]:
                 raise pyfuse3.FUSEError(errno.ENOENT)
+            if prow.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
             rp_parent = prow["remote_path"]
         else:
-            rp_parent = "disk:/"
+            raise pyfuse3.FUSEError(errno.EPERM)
 
         if await self.db_manager.lookup_file(parent_id, name_s):
             raise pyfuse3.FUSEError(errno.EEXIST)
@@ -322,8 +342,9 @@ class CloudFusionVFS(pyfuse3.Operations):
         try:
             if h.get("dirty") or h.get("created"):
                 sz = os.path.getsize(temp) if os.path.isfile(temp) else 0
-                await self.cloud_api.upload_local_file(temp, h["remote"])
-                meta = await self.cloud_api.get_meta(h["remote"])
+                yc = self._yandex_client()
+                await yc.upload_local_file(temp, h["remote"])
+                meta = await yc.get_meta(h["remote"])
                 rev = _yandex_revision(meta)
                 cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
                 os.makedirs(cache_dir, exist_ok=True)
@@ -379,6 +400,8 @@ class CloudFusionVFS(pyfuse3.Operations):
             row = await self.db_manager.get_file_by_id(db_id)
             if not row or row["is_dir"]:
                 raise pyfuse3.FUSEError(errno.EINVAL)
+            if row.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
             lp = row.get("local_path")
             if lp and os.path.isfile(lp):
                 with open(lp, "r+b") as f:
@@ -396,16 +419,19 @@ class CloudFusionVFS(pyfuse3.Operations):
             prow = await self.db_manager.get_file_by_id(parent_id)
             if not prow or not prow["is_dir"]:
                 raise pyfuse3.FUSEError(errno.ENOENT)
+            if prow.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EROFS)
             rp_parent = prow["remote_path"]
         else:
-            rp_parent = "disk:/"
+            raise pyfuse3.FUSEError(errno.EPERM)
 
         if await self.db_manager.lookup_file(parent_id, name_s):
             raise pyfuse3.FUSEError(errno.EEXIST)
 
         remote = _remote_child(rp_parent, name_s)
-        await self.cloud_api.mkdir_remote(remote)
-        meta = await self.cloud_api.get_meta(remote)
+        yc = self._yandex_client()
+        await yc.mkdir_remote(remote)
+        meta = await yc.get_meta(remote)
         rev = _yandex_revision(meta)
 
         rid = await self.db_manager.insert_yandex_child(
@@ -431,7 +457,9 @@ class CloudFusionVFS(pyfuse3.Operations):
         row = await self.db_manager.get_file_by_id(fid)
         if row["is_dir"]:
             raise pyfuse3.FUSEError(errno.EISDIR)
-        await self.cloud_api.remove_remote(row["remote_path"])
+        if row.get("cloud_type") != "yandex":
+            raise pyfuse3.FUSEError(errno.EROFS)
+        await self._yandex_client().remove_remote(row["remote_path"])
         lp = row.get("local_path")
         if lp and os.path.isfile(lp):
             try:
@@ -453,7 +481,9 @@ class CloudFusionVFS(pyfuse3.Operations):
         kids = await self.db_manager.get_readdir_entries(fid)
         if kids:
             raise pyfuse3.FUSEError(errno.ENOTEMPTY)
-        await self.cloud_api.remove_remote(row["remote_path"])
+        if row.get("cloud_type") != "yandex":
+            raise pyfuse3.FUSEError(errno.EROFS)
+        await self._yandex_client().remove_remote(row["remote_path"])
         await self.db_manager.delete_file_row_yandex(fid)
         _invalidate_inode_async(parent_inode)
 
@@ -478,19 +508,26 @@ class CloudFusionVFS(pyfuse3.Operations):
             pnew = await self.db_manager.get_file_by_id(pid_new)
             if not pnew or not pnew["is_dir"]:
                 raise pyfuse3.FUSEError(errno.ENOENT)
+            if pnew.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EXDEV)
             rp_new_parent = pnew["remote_path"]
         else:
-            rp_new_parent = "disk:/"
+            raise pyfuse3.FUSEError(errno.EXDEV)
 
         new_remote = _remote_child(rp_new_parent, name_new_s)
 
         old_row = await self.db_manager.get_file_by_id(old_id)
         old_remote = old_row["remote_path"]
+        if old_row.get("cloud_type") != "yandex":
+            raise pyfuse3.FUSEError(errno.EXDEV)
 
         if exist_new:
+            ex_row = await self.db_manager.get_file_by_id(exist_new)
+            if ex_row and ex_row.get("cloud_type") != "yandex":
+                raise pyfuse3.FUSEError(errno.EXDEV)
             await self.db_manager.delete_subtree(exist_new)
 
-        await self.cloud_api.move_remote(old_remote, new_remote, overwrite=True)
+        await self._yandex_client().move_remote(old_remote, new_remote, overwrite=True)
 
         if old_row["is_dir"]:
             await self.db_manager.update_yandex_entry_meta(
