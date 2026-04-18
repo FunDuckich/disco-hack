@@ -1,26 +1,21 @@
-# daemon/database/importer.py
 import logging
-import aiosqlite
 
 import aiosqlite
 
 
-async def import_cloud_to_db(db_manager, cloud_files, cloud_type):
-    """
-    cloud_files: список от API Яндекса вида:
-    [{'path': 'disk:/foo', 'type': 'dir', 'name': 'foo'}, {'path': 'disk:/foo/bar.txt', 'type': 'file', ...}]
-    """
+async def import_cloud_to_db(db_manager, cloud_files, cloud_type, path_to_id_seed: dict | None = None):
     logging.info(f"Starting import for {len(cloud_files)} items from {cloud_type}")
 
     cloud_files.sort(key=lambda x: x['path'].count('/'))
 
     path_to_id = {"": None}
-
-    prepared_data = []
+    if path_to_id_seed:
+        path_to_id.update(path_to_id_seed)
 
     for item in cloud_files:
         full_path = item['path'].replace('disk:', '').rstrip('/')
-        if not full_path.startswith('/'): full_path = '/' + full_path
+        if not full_path.startswith('/'):
+            full_path = '/' + full_path
 
         parts = full_path.split('/')
         parent_path = "/".join(parts[:-1])
@@ -41,11 +36,12 @@ async def import_cloud_to_db(db_manager, cloud_files, cloud_type):
             cursor = await db.execute('''
                 INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag)
                 VALUES (:parent_id, :name, :is_dir, :size, :cloud_type, :remote_path, :etag)
-                ON CONFLICT(cloud_type, remote_path) DO UPDATE SET
+            ON CONFLICT(cloud_type, remote_path) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     name = excluded.name,
-                    size = excluded.size
-                RETURNING id
+                    size = excluded.size,
+                    etag = excluded.etag
+                    RETURNING id
              ''', file_data)
             row = await cursor.fetchone()
             new_id = row[0]

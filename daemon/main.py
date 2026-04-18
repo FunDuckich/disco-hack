@@ -3,25 +3,24 @@ import logging
 import os
 import webbrowser
 from contextlib import asynccontextmanager
-
+import httpx
 import uvicorn
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse
 
-from api.middleware import LoggingMiddleware
-from api.schemas import FileItem, PinResponse, SearchResult, StatsResponse
-from core.lru_engine import run_lru_cleanup
-from daemon.cloud_api.auth import YandexAuthenticator
-from database.manager import DBManager
+from .cloud_api.auth import YandexAuthenticator
+from .api.middleware import LoggingMiddleware
+from .api.routers import auth, files, sync, system
+from .core.lru_engine import run_lru_cleanup
+from .database.manager import DBManager
+from .config import settings
+from pydantic import BaseModel
+from .cloud_api.nextcloud import NextcloudAsyncClient
 
-
-CACHE_DIR = "~/.cache/cloud-fusion/"
-MAX_CACHE_GB = 5
-MOUNTPOINT = "~/CloudFusion"
-DB_PATH = "cloudfusion.db"
-
+class NextcloudInit(BaseModel):
+    host: str
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,14 +28,72 @@ logging.basicConfig(
 )
 log = logging.getLogger("cloudfusion")
 
-db = DBManager(DB_PATH)
+db = DBManager(settings.db_path)
+
+try:
+    from .core.mount import start_cloud_fusion
+    _FUSE_AVAILABLE = True
+    _FUSE_IMPORT_ERROR: Exception | None = None
+except ImportError as e:
+    start_cloud_fusion = None
+    _FUSE_AVAILABLE = False
+    _FUSE_IMPORT_ERROR = e
+
+
+async def lru_scheduler():
+    while True:
+        try:
+            await run_lru_cleanup(db.db_path, settings.cache_dir, settings.max_cache_gb)
+        except Exception:
+            log.exception("LRU cleanup failed")
+        await asyncio.sleep(600)
+
+
+async def _cancel(task: asyncio.Task | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs(os.path.expanduser(CACHE_DIR), exist_ok=True)
+    os.makedirs(os.path.expanduser(settings.cache_dir), exist_ok=True)
     await db.init_db()
+    await db.ensure_yandex_disk_root_folder()
+    saved_max = await db.get_config("max_cache_gb")
+    if saved_max is not None:
+        settings.max_cache_gb = float(saved_max)
     lru_task = asyncio.create_task(lru_scheduler())
-    yield
-    lru_task.cancel()
+    log.info("CloudFusion daemon started (cache=%s, limit=%dGB)", settings.cache_dir, settings.max_cache_gb)
+
+    mount_task: asyncio.Task | None = None
+    if settings.enable_fuse:
+        if not _FUSE_AVAILABLE:
+            log.warning(
+                "ENABLE_FUSE=true but FUSE imports failed (%s). Server will run without mount.",
+                _FUSE_IMPORT_ERROR,
+            )
+        else:
+            try:
+                mount_task = asyncio.create_task(start_cloud_fusion())
+                log.info("FUSE mount task started (mountpoint=%s)", settings.mountpoint)
+            except Exception:
+                log.exception("Failed to start FUSE mount task — continuing without mount")
+    else:
+        log.info("FUSE disabled (set ENABLE_FUSE=true to enable)")
+
+    try:
+        yield
+    finally:
+        await _cancel(mount_task)
+        await _cancel(lru_task)
+        await db.close()
+        log.info("CloudFusion daemon stopped")
+
 
 app = FastAPI(title="CloudFusion", lifespan=lifespan)
 
@@ -48,11 +105,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.post("/api/auth/nextcloud/start")
+async def start_nextcloud_auth(data: NextcloudInit):
+    host = data.host.rstrip('/')
+
+    # 1. Просим Nextcloud начать процесс входа
+    # Отправляем User-Agent, чтобы Nextcloud знал, как нас называть
+    headers = {"User-Agent": "CloudFusion App"}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{host}/index.php/login/v2",
+                headers=headers
+            )
+            response.raise_for_status()
+            nc_data = response.json()
+
+            login_url = nc_data['login']
+            poll_token = nc_data['poll']['token']
+            poll_endpoint = nc_data['poll']['endpoint']
+
+            # 2. Открываем браузер пользователю
+            webbrowser.open(login_url)
+
+            # 3. Запускаем фоновую задачу ожидания (polling)
+            # В реальности лучше не блокировать ответ, но для хакатона сойдет
+            asyncio.create_task(poll_nextcloud_token(host, poll_endpoint, poll_token))
+
+            return {"status": "browser_opened", "message": "Пожалуйста, авторизуйтесь в браузере"}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Не удалось связаться с сервером: {e}")
+
+
+# Фоновая функция, которая каждую секунду дергает сервер
+async def poll_nextcloud_token(host: str, poll_endpoint: str, poll_token: str):
+    print("Начинаю ожидание авторизации в браузере...")
+
+    async with httpx.AsyncClient() as client:
+        # Пингуем сервер 60 раз (1 минуту), пока юзер логинится
+        for _ in range(60):
+            response = await client.post(poll_endpoint, data={"token": poll_token})
+
+            if response.status_code == 200:
+                result = response.json()
+                app_password = result['appPassword']
+                login = result['loginName']
+
+                print(f"🔥 УСПЕХ! Получен пароль для {login}")
+
+                # Сохраняем в нашу базу!
+                await db.set_config("nc_host", host)
+                await db.set_config("nc_login", login)
+                await db.set_config("nc_password", app_password)
+                await db.set_config("active_cloud", "nextcloud")
+                return
+
+            elif response.status_code == 404:
+                # 404 означает "Юзер еще не нажал кнопку разрешить". Просто ждем.
+                await asyncio.sleep(1)
+            else:
+                print("Ошибка при polling:", response.text)
+                break
+
+    print("Таймаут ожидания авторизации Nextcloud.")
+
 @app.get("/api/auth/login")
 def login_route():
     url = YandexAuthenticator.get_login_url()
     webbrowser.open(url)
     return {"status": "browser_opened"}
+
 
 @app.get("/callback", response_class=HTMLResponse)
 async def yandex_callback(code: str = Query(...)):
@@ -61,48 +186,20 @@ async def yandex_callback(code: str = Query(...)):
     if token:
         await db.set_config("yandex_token", token)
         print(f"🔥 Токен успешно сохранен в БД")
-
-        # Можно отправить сигнал (через событие или переменную),
-        # чтобы FUSE узнал о появлении токена
         return "<h1>Успешно! Теперь вернитесь в приложение.</h1>"
     else:
         return "<h1>Ошибка авторизации</h1>"
 
-async def lru_scheduler():
-    while True:
-        try:
-            await run_lru_cleanup(db.db_path, CACHE_DIR, MAX_CACHE_GB)
-        except Exception:
-            log.exception("LRU cleanup failed")
-        await asyncio.sleep(600)
-
-@app.get("/api/search", response_model=list[SearchResult])
-async def api_search(q: str = Query(..., min_length=1)):
-    return await db.search_files(q)
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-@app.get("/api/stats", response_model=StatsResponse)
-async def api_stats():
-    return await db.get_stats()
-
-
-@app.get("/api/files/list", response_model=list[FileItem])
-async def api_list(parent_id: int = None):
-    return await db.get_items_by_parent(parent_id)
-
-
-@app.get("/api/files/{file_id}", response_model=FileItem)
-async def api_file(file_id: int):
-    file = await db.get_file_by_id(file_id)
-    if file is None:
-        raise HTTPException(status_code=404, detail="File not found")
-    return file
-
-  
-@app.post("/api/files/{file_id}/pin", response_model=PinResponse)
-async def api_pin(file_id: int, pinned: bool):
-    await db.toggle_pin(file_id, pinned)
-    return {"status": "ok"}
+app.include_router(system.make_router(db))
+app.include_router(auth.make_router(db))
+app.include_router(files.make_router(db))
+app.include_router(sync.make_router(db))
 
 
 if __name__ == "__main__":
