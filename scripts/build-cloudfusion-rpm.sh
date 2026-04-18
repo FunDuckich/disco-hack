@@ -99,6 +99,7 @@ Source1:        cloudfusion-daemon
 Source2:        share_bridge.py
 Source3:        cloudfusion-link.desktop
 Source4:        cloudfusion-app.desktop
+Source5:        cloudfusion_filetools.py
 
 BuildArch:      x86_64
 
@@ -122,8 +123,9 @@ install -d %{buildroot}%{_datadir}/kio/servicemenus
 install -m0755 %{SOURCE0} %{buildroot}%{_bindir}/cloudfusion
 install -m0755 %{SOURCE1} %{buildroot}%{_libexecdir}/cloudfusion/cloudfusion-daemon
 install -m0755 %{SOURCE2} %{buildroot}%{_libexecdir}/cloudfusion/share_bridge.py
+install -m0755 %{SOURCE5} %{buildroot}%{_libexecdir}/cloudfusion/cloudfusion_filetools.py
 
-sed 's|REPLACE_CF_SHARE_BRIDGE|%{_libexecdir}/cloudfusion/share_bridge.py|' %{SOURCE3} > %{buildroot}%{_datadir}/kio/servicemenus/cloudfusion-link.desktop
+sed 's|REPLACE_CF_FILETOOLS|%{_libexecdir}/cloudfusion/cloudfusion_filetools.py|' %{SOURCE3} > %{buildroot}%{_datadir}/kio/servicemenus/cloudfusion-link.desktop
 chmod 0644 %{buildroot}%{_datadir}/kio/servicemenus/cloudfusion-link.desktop
 
 install -m0644 %{SOURCE4} %{buildroot}%{_datadir}/applications/cloudfusion-app.desktop
@@ -135,6 +137,7 @@ echo "CloudFusion installed. Restart Dolphin for KIO (kquitapp5 dolphin && dolph
 %{_bindir}/cloudfusion
 %{_libexecdir}/cloudfusion/cloudfusion-daemon
 %{_libexecdir}/cloudfusion/share_bridge.py
+%{_libexecdir}/cloudfusion/cloudfusion_filetools.py
 %{_datadir}/kio/servicemenus/cloudfusion-link.desktop
 %{_datadir}/applications/cloudfusion-app.desktop
 
@@ -160,7 +163,8 @@ build_rootfs_tarball() {
   install -m0755 "$GUI" "$staging/usr/bin/cloudfusion"
   install -m0755 "$DAEMON_BIN" "$staging/usr/libexec/cloudfusion/cloudfusion-daemon"
   install -m0755 "$ROOT/integration/scripts/share_bridge.py" "$staging/usr/libexec/cloudfusion/share_bridge.py"
-  sed "s|REPLACE_CF_SHARE_BRIDGE|/usr/libexec/cloudfusion/share_bridge.py|" \
+  install -m0755 "$ROOT/integration/scripts/cloudfusion_filetools.py" "$staging/usr/libexec/cloudfusion/cloudfusion_filetools.py"
+  sed "s|REPLACE_CF_FILETOOLS|/usr/libexec/cloudfusion/cloudfusion_filetools.py|" \
     "$ROOT/integration/desktop/cloudfusion-link.desktop" \
     >"$staging/usr/share/kio/servicemenus/cloudfusion-link.desktop"
   chmod 0644 "$staging/usr/share/kio/servicemenus/cloudfusion-link.desktop"
@@ -223,6 +227,7 @@ mkdir -p "$RPM_TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 install -m0755 "$GUI" "$RPM_TOP/SOURCES/cloudfusion"
 install -m0755 "$DAEMON_BIN" "$RPM_TOP/SOURCES/cloudfusion-daemon"
 install -m0755 "$ROOT/integration/scripts/share_bridge.py" "$RPM_TOP/SOURCES/share_bridge.py"
+install -m0755 "$ROOT/integration/scripts/cloudfusion_filetools.py" "$RPM_TOP/SOURCES/cloudfusion_filetools.py"
 install -m0644 "$ROOT/integration/desktop/cloudfusion-link.desktop" "$RPM_TOP/SOURCES/cloudfusion-link.desktop"
 install -m0644 "$ROOT/integration/desktop/cloudfusion-app.desktop" "$RPM_TOP/SOURCES/cloudfusion-app.desktop"
 

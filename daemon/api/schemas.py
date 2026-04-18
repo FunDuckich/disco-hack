@@ -46,6 +46,16 @@ class PinBody(BaseModel):
     pinned: bool
 
 
+class ResolveLocalResponse(BaseModel):
+    file_id: int
+    name: str
+    is_dir: bool
+    is_pinned: bool
+    status: str
+    cloud_type: str
+    remote_path: str
+
+
 class PinResponse(BaseModel):
     status: str
 

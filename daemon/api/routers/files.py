@@ -2,7 +2,15 @@ import logging
 import os
 
 from fastapi import APIRouter, Body, HTTPException, Query
-from ..schemas import FileItem, PathSegment, PinBody, PinResponse, SearchResult, SyncResponse
+from ..schemas import (
+    FileItem,
+    PathSegment,
+    PinBody,
+    PinResponse,
+    ResolveLocalResponse,
+    SearchResult,
+    SyncResponse,
+)
 from ...cloud_api.nextcloud import NextcloudAsyncClient
 from ...cloud_api.yandex import YandexDiskAsyncClient
 from ...config import settings
@@ -93,6 +101,37 @@ def make_router(db: DBManager) -> APIRouter:
         await db.set_file_status(file_id, "syncing")
         log.info("File %d marked for sync", file_id)
         return {"status": "syncing"}
+
+    @router.post("/files/resolve_local", response_model=ResolveLocalResponse)
+    async def resolve_local(data: dict = Body(...)):
+        """Сопоставить абсолютный путь в смонтированном FUSE с записью в БД (для скриптов Dolphin)."""
+        local_path = data.get("local_path")
+        if not local_path:
+            raise HTTPException(status_code=400, detail="local_path is required")
+        mount_abs = os.path.realpath(os.path.expanduser(settings.mountpoint))
+        try:
+            local_abs = os.path.realpath(os.path.expanduser(local_path))
+        except OSError as e:
+            raise HTTPException(status_code=400, detail=f"invalid path: {e}") from e
+        try:
+            cloud_type, remote_path = _fuse_local_to_cloud_remote(local_abs, mount_abs)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        row = await db.get_file_by_remote_path(remote_path, cloud_type)
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail="file not in index (open folder in Dolphin once or sync)",
+            )
+        return {
+            "file_id": row["id"],
+            "name": row.get("name") or "",
+            "is_dir": bool(row.get("is_dir")),
+            "is_pinned": bool(row.get("is_pinned")),
+            "status": row.get("status") or "stub",
+            "cloud_type": cloud_type,
+            "remote_path": remote_path,
+        }
 
     @router.post("/files/publish")
     async def publish_file(data: dict = Body(...)):

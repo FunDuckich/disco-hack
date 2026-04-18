@@ -12,11 +12,12 @@
 |------|------------|
 | `/usr/bin/cloudfusion` | Окно приложения из меню |
 | `/usr/libexec/cloudfusion/cloudfusion-daemon` | Демон API (Tauri на Linux при старте окна может запускать его сам) |
-| `/usr/libexec/cloudfusion/share_bridge.py` | Мост для Dolphin |
+| `/usr/libexec/cloudfusion/share_bridge.py` | Старый вход «только ссылка» (делегирует в `cloudfusion_filetools.py`) |
+| `/usr/libexec/cloudfusion/cloudfusion_filetools.py` | Меню Dolphin: ссылка, сброс кэша, pin, QR |
 | `/usr/share/applications/cloudfusion-app.desktop` | Ярлык |
-| `/usr/share/kio/servicemenus/cloudfusion-link.desktop` | Пункт «публичная ссылка» в Dolphin |
+| `/usr/share/kio/servicemenus/cloudfusion-link.desktop` | Подменю **CloudFusion** в ПКМ Dolphin (несколько действий) |
 
-Ожидаемые **.desktop** в репозитории: `integration/desktop/cloudfusion-app.desktop` (ярлык приложения, `Exec` под установку в `/usr/bin/cloudfusion`) и `integration/desktop/cloudfusion-link.desktop` (только сервисное меню Dolphin; путь к `share_bridge.py` подставляет `install-user.sh` или RPM). Отдельных .desktop для «выгнать из кэша» нет — это **HTTP**: `POST /api/files/{id}/drop_local_cache`, закрепление: `POST /api/files/{id}/pin` с телом `{"pinned":true}`.
+Ожидаемые **.desktop** в репозитории: `cloudfusion-app.desktop` и `cloudfusion-link.desktop` (сервисное меню; в `Exec` подставляется путь к **`cloudfusion_filetools.py`**). Действия вызывают HTTP API демона (`/api/files/resolve_local`, `publish`, `drop_local_cache`, `pin`).
 
 Перезапустите Dolphin: `kquitapp5 dolphin` и снова откройте его.
 
@@ -28,7 +29,7 @@
 
 1. Демон должен слушать API (обычно `python -m daemon.main` из **корня репозитория** — см. `daemon/.env`).
 2. Скопируйте `integration/desktop/cloudfusion-link.desktop` в `~/.local/share/kio/servicemenus/`.
-3. В `Exec=` укажите **абсолютный** путь к `integration/scripts/share_bridge.py` или запустите из корня репо: **`integration/desktop/install-user.sh`** — он подставит пути сам.
+3. В `Exec=` укажите **абсолютный** путь к `integration/scripts/cloudfusion_filetools.py` (или запустите **`integration/desktop/install-user.sh`** из корня репо — он подставит пути сам).
 4. Перезапустите Dolphin.
 
 База по умолчанию: `~/.local/share/cloudfusion/cloudfusion.db` (`DB_PATH` в `daemon/.env`).
@@ -38,7 +39,7 @@
 ## Проверка моста из терминала
 
 ```bash
-python3 /абсолютный/путь/к/репо/integration/scripts/share_bridge.py "$HOME/CloudFusion/YandexDisk/.../файл.txt"
+python3 /абсолютный/путь/к/репо/integration/scripts/cloudfusion_filetools.py share "$HOME/CloudFusion/YandexDisk/.../файл.txt"
 ```
 
 При успехе URL — в stdout.

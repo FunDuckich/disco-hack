@@ -43,7 +43,7 @@
 4. **`npm install`** (пропуск: **`--skip-npm`**).
 5. **`npm run tauri build`** (Vite пишет во **`dist/`**).
 6. **[`build-linux-daemon.sh`](../../scripts/build-linux-daemon.sh)** — PyInstaller кладёт бинарь в **`build/daemon-release/cloudfusion-daemon`**, не в **`dist/`**, чтобы фронт его не затёр.
-7. Копирование пяти файлов в **`$RPMBUILD_TOPDIR/SOURCES`**.
+7. Копирование шести файлов в **`$RPMBUILD_TOPDIR/SOURCES`**.
 8. **Встроенный** ASCII-spec в **`$RPMBUILD_TOPDIR/SPECS/cloudfusion.spec`** (не читается из git — обход BOM/CRLF и парсера на ALT).
 9. **`cd _topdir && LC_ALL=C rpmbuild -ba … SPECS/cloudfusion.spec`** → **`$RPMBUILD_TOPDIR/RPMS/`**; при ошибке **`rpmbuild`** дополнительно собирается **`build/cloudfusion-VERSION-linux-x86_64.tar.gz`**. Только архив, без RPM: **`./build-rpm.sh --tarball`**.
 
@@ -406,6 +406,10 @@ cp integration/scripts/share_bridge.py ~/rpmbuild/SOURCES/
 ```
 
 ```bash
+cp integration/scripts/cloudfusion_filetools.py ~/rpmbuild/SOURCES/
+```
+
+```bash
 cp integration/desktop/cloudfusion-link.desktop ~/rpmbuild/SOURCES/
 ```
 
@@ -421,7 +425,7 @@ chmod +x ~/rpmbuild/SOURCES/cloudfusion-daemon
 ls -la ~/rpmbuild/SOURCES/
 ```
 
-Должно быть **ровно 5** имён: **`cloudfusion`**, **`cloudfusion-daemon`**, **`share_bridge.py`**, **`cloudfusion-link.desktop`**, **`cloudfusion-app.desktop`**.
+Должно быть **ровно 6** имён: **`cloudfusion`**, **`cloudfusion-daemon`**, **`share_bridge.py`**, **`cloudfusion_filetools.py`**, **`cloudfusion-link.desktop`**, **`cloudfusion-app.desktop`**.
 
 ### Шаг 7. `rpmbuild`
 

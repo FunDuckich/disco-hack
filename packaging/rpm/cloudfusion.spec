@@ -15,6 +15,7 @@ Source1:        cloudfusion-daemon
 Source2:        share_bridge.py
 Source3:        cloudfusion-link.desktop
 Source4:        cloudfusion-app.desktop
+Source5:        cloudfusion_filetools.py
 
 BuildArch:      x86_64
 
@@ -41,9 +42,10 @@ install -d %{buildroot}%{_datadir}/kio/servicemenus
 install -m0755 %{SOURCE0} %{buildroot}%{_bindir}/cloudfusion
 install -m0755 %{SOURCE1} %{buildroot}%{_libexecdir}/cloudfusion/cloudfusion-daemon
 install -m0755 %{SOURCE2} %{buildroot}%{_libexecdir}/cloudfusion/share_bridge.py
+install -m0755 %{SOURCE5} %{buildroot}%{_libexecdir}/cloudfusion/cloudfusion_filetools.py
 
-# KIO: подставляем путь к мосту (как в integration/desktop/install-user.sh).
-sed 's|REPLACE_CF_SHARE_BRIDGE|%{_libexecdir}/cloudfusion/share_bridge.py|' \
+# KIO: пути к cloudfusion_filetools.py (как в integration/desktop/install-user.sh).
+sed 's|REPLACE_CF_FILETOOLS|%{_libexecdir}/cloudfusion/cloudfusion_filetools.py|' \
   %{SOURCE3} > %{buildroot}%{_datadir}/kio/servicemenus/cloudfusion-link.desktop
 chmod 0644 %{buildroot}%{_datadir}/kio/servicemenus/cloudfusion-link.desktop
 
@@ -56,6 +58,7 @@ echo "CloudFusion установлен. Перезапустите Dolphin, чт
 %{_bindir}/cloudfusion
 %{_libexecdir}/cloudfusion/cloudfusion-daemon
 %{_libexecdir}/cloudfusion/share_bridge.py
+%{_libexecdir}/cloudfusion/cloudfusion_filetools.py
 %{_datadir}/kio/servicemenus/cloudfusion-link.desktop
 %{_datadir}/applications/cloudfusion-app.desktop
 

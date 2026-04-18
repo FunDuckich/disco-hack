@@ -38,6 +38,12 @@ def run() -> int:
         print("usage: share_bridge.py <file>", file=sys.stderr)
         return 2
 
+    # Рядом с RPM лежит cloudfusion_filetools.py — делегируем, один код для меню Dolphin.
+    here = os.path.dirname(os.path.abspath(__file__))
+    tools = os.path.join(here, "cloudfusion_filetools.py")
+    if os.path.isfile(tools):
+        return subprocess.call([sys.executable, tools, "share", sys.argv[1]])
+
     path = os.path.abspath(sys.argv[1])
     base = os.environ.get("CLOUDFUSION_API_BASE", "http://127.0.0.1:8000").rstrip("/")
     url = f"{base}/api/files/publish"
