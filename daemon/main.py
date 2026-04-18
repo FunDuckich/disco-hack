@@ -6,11 +6,10 @@ from contextlib import asynccontextmanager
 import httpx
 import uvicorn
 
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import JSONResponse
 
-from .cloud_api.auth import YandexAuthenticator
 from .api.middleware import LoggingMiddleware
 from .api.routers import auth, files, sync, system
 from .core.lru_engine import run_lru_cleanup
@@ -170,24 +169,6 @@ async def poll_nextcloud_token(host: str, poll_endpoint: str, poll_token: str):
                 break
 
     print("Таймаут ожидания авторизации Nextcloud.")
-
-@app.get("/api/auth/login")
-def login_route():
-    url = YandexAuthenticator.get_login_url()
-    webbrowser.open(url)
-    return {"status": "browser_opened"}
-
-
-@app.get("/callback", response_class=HTMLResponse)
-async def yandex_callback(code: str = Query(...)):
-    token = YandexAuthenticator.get_token_from_code(code)
-
-    if token:
-        await db.set_config("yandex_token", token)
-        print(f"🔥 Токен успешно сохранен в БД")
-        return "<h1>Успешно! Теперь вернитесь в приложение.</h1>"
-    else:
-        return "<h1>Ошибка авторизации</h1>"
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
