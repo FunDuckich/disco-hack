@@ -11,6 +11,7 @@ from ..database.importer import import_cloud_to_db
 from ..database.manager import DBManager
 from .vfs import CloudFusionVFS
 from .yandex_folder_sync import merge_last_uploaded_loop
+from .nextcloud_sync import nextcloud_sync_loop
 
 log = logging.getLogger(__name__)
 
@@ -89,29 +90,42 @@ async def start_cloud_fusion():
     if yandex_client:
         poll_task = asyncio.create_task(merge_last_uploaded_loop(db_manager, yandex_client))
 
+    vfs = CloudFusionVFS(db_manager, active_clients)
+
+    background_tasks = []
+
+    if "yandex" in active_clients:
+        y_task = asyncio.create_task(
+            merge_last_uploaded_loop(db_manager, active_clients["yandex"])
+        )
+        background_tasks.append(y_task)
+
+    if "nextcloud" in active_clients:
+        nc_task = asyncio.create_task(
+            nextcloud_sync_loop(db_manager, active_clients["nextcloud"])
+        )
+        background_tasks.append(nc_task)
+
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=cloudfusion')
 
     pyfuse3.asyncio.enable()
     pyfuse3.init(vfs, mountpoint, fuse_options)
 
-    asyncio.create_task(
-        _background_initial_sync(db_manager, active_clients, yandex_root_id)
-    )
-
-    logging.info(f"--- CloudFusion монтируется к {mountpoint} (полный индекс в фоне) ---")
+    logging.info(f"--- CloudFusion монтируется к {mountpoint} ---")
+    logging.info(f"Запущено фоновых задач (поллеров): {len(background_tasks)}")
 
     try:
         await pyfuse3.main()
     except Exception as e:
         logging.error(f"Критическая ошибка FUSE: {e}")
     finally:
-        if poll_task:
-            poll_task.cancel()
-            try:
-                await poll_task
-            except asyncio.CancelledError:
-                pass
+        for task in background_tasks:
+            task.cancel()
+
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+
         pyfuse3.close()
         logging.info("Диск отмонтирован.")
 

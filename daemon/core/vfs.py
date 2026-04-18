@@ -22,6 +22,8 @@ _REMOVE_TIMEOUT = 120.0
 _MKDIR_TIMEOUT = 120.0
 _MOVE_TIMEOUT = 180.0
 _GET_META_TIMEOUT = 60.0
+# Пуллинг роста файла при stub + read (видео качается в фоне).
+_STUB_READ_POLL_SEC = 0.05
 
 
 def _sync_read_bytes(path: str, off: int, size: int) -> bytes:
@@ -94,6 +96,8 @@ class CloudFusionVFS(pyfuse3.Operations):
         self._stub_fetch_locks: dict[int, asyncio.Lock] = {}
         # Загрузка после close() не должна блокировать FUSE: фон + await при rename/unlink/open(WR).
         self._pending_finalize_uploads: dict[int, asyncio.Task] = {}
+        # Stub: один фоновый download на db_id; read ждёт только нужный объём байт (не весь файл сразу).
+        self._stub_download_tasks: dict[int, asyncio.Task] = {}
 
     def _stub_lock(self, db_id: int) -> asyncio.Lock:
         if db_id not in self._stub_fetch_locks:
@@ -202,23 +206,117 @@ class CloudFusionVFS(pyfuse3.Operations):
             if self._pending_finalize_uploads.get(db_id) is cur:
                 self._pending_finalize_uploads.pop(db_id, None)
 
-    async def _ensure_file_cached(self, db_id: int) -> None:
+    @staticmethod
+    def _stub_cache_path(db_id: int, name: str) -> str:
+        cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+        return os.path.join(cache_dir, f"{db_id}_{name}")
+
+    async def _stub_start_or_join_download(self, db_id: int) -> None:
         async with self._stub_lock(db_id):
             row = await self.db_manager.get_file_by_id(db_id)
-            if not row or row.get("is_dir"):
+            if not row or row.get("is_dir") or row.get("status") != "stub":
                 return
-            if row.get("status") != "stub":
+            t = self._stub_download_tasks.get(db_id)
+            if t is not None and not t.done():
+                return
+            self._stub_download_tasks[db_id] = asyncio.create_task(
+                self._stub_download_worker(db_id)
+            )
+
+    async def _stub_download_worker(self, db_id: int) -> None:
+        try:
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row or row.get("is_dir") or row.get("status") != "stub":
                 return
             cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
-            os.makedirs(cache_dir, exist_ok=True)
-            local_path = os.path.join(cache_dir, f"{db_id}_{row['name']}")
-            cloud_type = row["cloud_type"]
-            target = self._client_for_cloud_type(cloud_type)
+            await asyncio.to_thread(os.makedirs, cache_dir, 0o755, True)
+            local_path = self._stub_cache_path(db_id, row["name"])
+            target = self._client_for_cloud_type(row.get("cloud_type"))
             if not target:
-                raise pyfuse3.FUSEError(errno.EIO)
-            log.info("FUSE: загрузка в кэш %s...", row["name"])
+                raise RuntimeError("no cloud client")
+            log.info("FUSE: загрузка в кэш (фон) %s...", row["name"])
             await target.download(row["remote_path"], local_path)
             await self.db_manager.update_downloaded_file(db_id, local_path)
+        except Exception:
+            log.exception("FUSE stub download db_id=%s", db_id)
+            raise
+        finally:
+            cur = asyncio.current_task()
+            existing = self._stub_download_tasks.get(db_id)
+            if existing is cur:
+                self._stub_download_tasks.pop(db_id, None)
+
+    async def _stub_wait_readable(
+        self,
+        db_id: int,
+        local_path: str,
+        off: int,
+        size: int,
+        total_hint: int,
+    ) -> None:
+        """Ждём, пока на диске не будет байт для read(off, size) — без окончания полного скачивания."""
+        if size <= 0:
+            return
+        if total_hint > 0 and off >= total_hint:
+            return
+        want_end = off + size
+        if total_hint > 0:
+            want_end = min(want_end, total_hint)
+        while True:
+            row = await self.db_manager.get_file_by_id(db_id)
+            if row.get("status") == "cached":
+                return
+            clen = 0
+            if await asyncio.to_thread(os.path.isfile, local_path):
+                clen = await asyncio.to_thread(_sync_file_size, local_path)
+            if clen >= want_end:
+                return
+            t = self._stub_download_tasks.get(db_id)
+            if t is not None and t.done():
+                exc = t.exception()
+                if exc is not None:
+                    raise pyfuse3.FUSEError(errno.EIO) from exc
+                if clen > off or (total_hint > 0 and off >= total_hint):
+                    return
+                if await asyncio.to_thread(os.path.isfile, local_path):
+                    clen2 = await asyncio.to_thread(_sync_file_size, local_path)
+                    if clen2 > off or clen2 >= want_end:
+                        return
+                raise pyfuse3.FUSEError(errno.EIO)
+            await asyncio.sleep(_STUB_READ_POLL_SEC)
+
+    async def _stub_await_fully_cached(self, db_id: int) -> None:
+        """Для open(WR) по stub — нужен полный локальный файл."""
+        await self._stub_start_or_join_download(db_id)
+        t = self._stub_download_tasks.get(db_id)
+        if t:
+            await t
+            exc = t.exception()
+            if exc is not None:
+                raise pyfuse3.FUSEError(errno.EIO) from exc
+        row = await self.db_manager.get_file_by_id(db_id)
+        if row.get("status") != "cached":
+            raise pyfuse3.FUSEError(errno.EIO)
+
+    async def _cancel_stub_download(self, db_id: int) -> None:
+        row = await self.db_manager.get_file_by_id(db_id)
+        partial = None
+        if row and not row.get("is_dir") and row.get("status") == "stub":
+            partial = self._stub_cache_path(db_id, row["name"])
+        t = self._stub_download_tasks.pop(db_id, None)
+        if t and not t.done():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.exception("FUSE cancel stub download db_id=%s", db_id)
+        if partial and await asyncio.to_thread(os.path.isfile, partial):
+            try:
+                await asyncio.to_thread(os.unlink, partial)
+            except OSError:
+                pass
 
     def _client_for_cloud_type(self, cloud_type: str | None):
         if not cloud_type:
@@ -257,6 +355,9 @@ class CloudFusionVFS(pyfuse3.Operations):
         if db_id is None:
             entry.st_mode = stat.S_IFDIR | 0o755
             entry.st_size = 0
+            entry.st_nlink = 2
+            entry.st_blksize = 4096
+            entry.st_blocks = 0
             return entry
 
         row = await self.db_manager.get_file_by_id(db_id)
@@ -266,8 +367,13 @@ class CloudFusionVFS(pyfuse3.Operations):
         if row["is_dir"]:
             entry.st_mode = stat.S_IFDIR | 0o755
             entry.st_size = 0
+            entry.st_nlink = 2
+            entry.st_blksize = 4096
+            entry.st_blocks = 0
         else:
             entry.st_mode = stat.S_IFREG | 0o644
+            entry.st_nlink = 1
+            entry.st_blksize = 4096
             lp = row.get("local_path")
 
             def _attr_size_for_file(local_p, row_size):
@@ -278,6 +384,8 @@ class CloudFusionVFS(pyfuse3.Operations):
             entry.st_size = await asyncio.to_thread(
                 _attr_size_for_file, lp, row["size"]
             )
+            sz = int(entry.st_size)
+            entry.st_blocks = (sz + 511) // 512 if sz else 0
 
         return entry
 
@@ -335,11 +443,28 @@ class CloudFusionVFS(pyfuse3.Operations):
 
         entries = await self.db_manager.get_readdir_entries(parent_db_id)
 
+        stamp = int(time.time() * 1e9)
         for i, row in enumerate(entries[off:], start=off):
             child_inode = self._get_inode(row["id"])
             attr = pyfuse3.EntryAttributes()
             attr.st_ino = child_inode
             attr.st_mode = (stat.S_IFDIR | 0o755) if row["is_dir"] else (stat.S_IFREG | 0o644)
+            attr.st_uid = os.getuid()
+            attr.st_gid = os.getgid()
+            attr.st_atime_ns = stamp
+            attr.st_mtime_ns = stamp
+            attr.st_ctime_ns = stamp
+            if row["is_dir"]:
+                attr.st_nlink = 2
+                attr.st_size = 0
+                attr.st_blksize = 4096
+                attr.st_blocks = 0
+            else:
+                attr.st_nlink = 1
+                sz = int(row.get("size") or 0)
+                attr.st_size = sz
+                attr.st_blksize = 4096
+                attr.st_blocks = (sz + 511) // 512 if sz else 0
 
             if not pyfuse3.readdir_reply(token, row["name"].encode("utf-8"), attr, i + 1):
                 break
@@ -371,6 +496,8 @@ class CloudFusionVFS(pyfuse3.Operations):
 
         accmode = flags & os.O_ACCMODE
         if accmode == os.O_RDONLY:
+            if row.get("status") == "stub":
+                asyncio.create_task(self._stub_start_or_join_download(db_id))
             return pyfuse3.FileInfo(fh=inode)
 
         if accmode in (os.O_WRONLY, os.O_RDWR):
@@ -389,10 +516,12 @@ class CloudFusionVFS(pyfuse3.Operations):
             elif row.get("local_path") and os.path.isfile(row["local_path"]):
                 await asyncio.to_thread(shutil.copy2, row["local_path"], temp)
             elif row["status"] == "stub":
-                wc = self._client_for_cloud_type(row.get("cloud_type"))
-                if not wc:
+                await self._stub_await_fully_cached(db_id)
+                row = await self.db_manager.get_file_by_id(db_id)
+                lp = row.get("local_path")
+                if not lp or not await asyncio.to_thread(os.path.isfile, lp):
                     raise pyfuse3.FUSEError(errno.EIO)
-                await wc.download(row["remote_path"], temp)
+                await asyncio.to_thread(shutil.copy2, lp, temp)
             else:
                 open(temp, "wb").close()
 
@@ -476,11 +605,18 @@ class CloudFusionVFS(pyfuse3.Operations):
         row = await self.db_manager.get_file_by_id(db_id)
 
         if row.get("status") == "stub":
-            await self._ensure_file_cached(db_id)
+            cache_lp = self._stub_cache_path(db_id, row["name"])
+            await self._stub_start_or_join_download(db_id)
+            total_hint = int(row.get("size") or 0)
+            await self._stub_wait_readable(db_id, cache_lp, off, size, total_hint)
             row = await self.db_manager.get_file_by_id(db_id)
 
-        local_path = row["local_path"]
-        if not local_path or not os.path.exists(local_path):
+        local_path = row.get("local_path")
+        if row.get("status") == "stub" and (
+            not local_path or not await asyncio.to_thread(os.path.exists, local_path)
+        ):
+            local_path = self._stub_cache_path(db_id, row["name"])
+        if not local_path or not await asyncio.to_thread(os.path.exists, local_path):
             raise pyfuse3.FUSEError(errno.EIO)
 
         try:
@@ -518,9 +654,15 @@ class CloudFusionVFS(pyfuse3.Operations):
                     exc = prev.exception()
                     if exc is not None:
                         raise exc
-                self._pending_finalize_uploads[h["db_id"]] = asyncio.create_task(
-                    self._finalize_upload_worker(h)
-                )
+                task = asyncio.create_task(self._finalize_upload_worker(h))
+                self._pending_finalize_uploads[h["db_id"]] = task
+
+                def _consume_finalize_task_exc(t: asyncio.Task) -> None:
+                    if t.cancelled():
+                        return
+                    t.exception()
+
+                task.add_done_callback(_consume_finalize_task_exc)
                 log.info(
                     "FUSE release: загрузка в фоне на %s (db_id=%s)",
                     h["remote"],
@@ -627,6 +769,7 @@ class CloudFusionVFS(pyfuse3.Operations):
         if row.get("cloud_type") != "yandex":
             raise pyfuse3.FUSEError(errno.EROFS)
         remote_path = row["remote_path"]
+        await self._cancel_stub_download(fid)
         await self._cancel_pending_finalize(fid)
         row = await self.db_manager.get_file_by_id(fid)
         if not row:

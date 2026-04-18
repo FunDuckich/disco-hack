@@ -164,7 +164,7 @@ async def poll_nextcloud_token(host: str, poll_endpoint: str, poll_token: str):
 
             elif response.status_code == 404:
                 # 404 означает "Юзер еще не нажал кнопку разрешить". Просто ждем.
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
             else:
                 print("Ошибка при polling:", response.text)
                 break
