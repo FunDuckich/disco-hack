@@ -2,7 +2,9 @@ import logging
 import os
 
 import aiosqlite
+import os
 
+from ..api.schemas import FileItem
 
 class DBManager:
     def __init__(self, db_path="cloudfusion.db"):
@@ -80,6 +82,11 @@ class DBManager:
         row = await cursor.fetchone()
         return row['value'] if row else None
 
+    async def delete_config(self, key: str):
+        db = await self.get_db()
+        await db.execute("DELETE FROM config WHERE key = ?", (key,))
+        await db.commit()
+
     async def bulk_upsert_metadata(self, metadata_list: list[dict]):
         db = await self.get_db()
         await db.executemany('''
@@ -127,6 +134,93 @@ class DBManager:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def get_file_id_by_remote_path(self, cloud_type: str, remote_path: str) -> int | None:
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id FROM files WHERE cloud_type = ? AND remote_path = ?",
+            (cloud_type, remote_path),
+        )
+        row = await cur.fetchone()
+        return int(row["id"]) if row else None
+
+    async def delete_yandex_children_subtrees(self, parent_id: int | None) -> None:
+        db = await self.get_db()
+        await db.execute(
+            """
+            WITH RECURSIVE doomed AS (
+                SELECT id FROM files
+                WHERE cloud_type = 'yandex' AND parent_id IS ?
+                UNION ALL
+                SELECT f.id FROM files AS f
+                INNER JOIN doomed AS d ON f.parent_id = d.id
+            )
+            DELETE FROM files WHERE id IN (SELECT id FROM doomed)
+            """,
+            (parent_id,),
+        )
+        await db.commit()
+
+    async def get_direct_children_yandex(self, parent_id: int | None) -> list[dict]:
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT id, name, remote_path, is_dir
+            FROM files
+            WHERE cloud_type = 'yandex' AND parent_id IS ?
+            """,
+            (parent_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def upsert_yandex_direct_child(self, parent_db_id: int | None, item: dict) -> None:
+        db = await self.get_db()
+        file_data = {
+            "parent_id": parent_db_id,
+            "name": item["name"],
+            "is_dir": 1 if item["type"] == "dir" else 0,
+            "size": item.get("size", 0),
+            "cloud_type": "yandex",
+            "remote_path": item["path"],
+            "etag": str(item.get("revision") or item.get("md5") or ""),
+        }
+        await db.execute(
+            """
+            INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag, status)
+            VALUES (:parent_id, :name, :is_dir, :size, :cloud_type, :remote_path, :etag, 'stub')
+            ON CONFLICT(cloud_type, remote_path) DO UPDATE SET
+                parent_id = excluded.parent_id,
+                name = excluded.name,
+                size = excluded.size,
+                etag = excluded.etag,
+                is_dir = excluded.is_dir
+            """,
+            file_data,
+        )
+        await db.commit()
+
+    async def delete_subtree(self, root_id: int) -> None:
+        db = await self.get_db()
+        await db.execute(
+            """
+            WITH RECURSIVE doomed AS (
+                SELECT id FROM files WHERE id = ?
+                UNION ALL
+                SELECT f.id FROM files AS f
+                INNER JOIN doomed AS d ON f.parent_id = d.id
+            )
+            DELETE FROM files WHERE id IN (SELECT id FROM doomed)
+            """,
+            (root_id,),
+        )
+        await db.commit()
+
+    async def update_file_etag(self, file_id: int, etag: str) -> None:
+        db = await self.get_db()
+        await db.execute("UPDATE files SET etag = ? WHERE id = ?", (etag, file_id))
+        await db.commit()
+
     async def update_downloaded_file(self, db_id: int, local_path: str):
         db = await self.get_db()
         await db.execute(
@@ -135,13 +229,56 @@ class DBManager:
         )
         await db.commit()
 
+    async def set_file_status(self, file_id: int, status: str):
+        db = await self.get_db()
+        await db.execute("UPDATE files SET status = ? WHERE id = ?", (status, file_id))
+        await db.commit()
+
+    async def get_stats(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('''
+                SELECT
+                    COUNT(CASE WHEN is_dir = 0 THEN 1 END) AS total_files,
+                    COUNT(CASE WHEN is_dir = 0 AND status = 'cached' THEN 1 END) AS cached_count,
+                    COUNT(CASE WHEN is_dir = 0 AND status = 'syncing' THEN 1 END) AS syncing_count,
+                    COUNT(CASE WHEN is_dir = 0 AND is_pinned = 1 THEN 1 END) AS pinned_count,
+                    COALESCE(SUM(CASE WHEN status = 'cached' THEN size ELSE 0 END), 0) AS cache_size
+                FROM files
+            ''')
+            return dict(await cursor.fetchone())
+
+    async def toggle_pin(self, file_id: int, is_pinned: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE files SET is_pinned = ? WHERE id = ?",
+                (1 if is_pinned else 0, file_id),
+            )
+            await db.commit()
+
     async def search_files(self, query: str):
         db = await self.get_db()
         db.row_factory = aiosqlite.Row
         cursor = await db.execute('''
-            SELECT f.id, f.name, f.remote_path, f.cloud_type, f.status, f.size 
+            SELECT f.id, f.name, f.remote_path, f.cloud_type, f.status, f.size
             FROM files_fts AS fts
             JOIN files AS f ON f.id = fts.rowid
             WHERE fts.name MATCH ? LIMIT 50
         ''', (f"{query}*",))
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_ancestors(self, file_id: int):
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute('''
+            WITH RECURSIVE ancestors(id, parent_id, name, depth) AS (
+                SELECT id, parent_id, name, 0 FROM files WHERE id = ?
+                UNION ALL
+                SELECT f.id, f.parent_id, f.name, a.depth + 1
+                FROM files f
+                JOIN ancestors a ON f.id = a.parent_id
+                WHERE a.depth < 64
+            )
+            SELECT id, name FROM ancestors ORDER BY depth DESC
+        ''', (file_id,))
         return [dict(r) for r in await cursor.fetchall()]

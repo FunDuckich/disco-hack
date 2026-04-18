@@ -8,7 +8,7 @@
 Современные облачные хранилища либо заставляют пользователя использовать браузер, либо предлагают медленный WebDAV, либо забивают локальный диск полной синхронизацией. Мы решаем это.
 
 ## ✨ Наше решение
-**DiscoHack** — это мост между облаком и вашей системой. Мы используем технологию **FUSE**, чтобы создать виртуальный диск `~/DiscoHack`, который объединяет Яндекс.Диск, Nextcloud и другие сервиса в одном окне вашего любимого файлового менеджера (Dolphin/Nautilus).
+**DiscoHack** — это мост между облаком и вашей системой. Мы используем технологию **FUSE**, чтобы создать виртуальный диск (сейчас точка монтирования по умолчанию — `~/CloudFusion`, см. `daemon/core/mount.py`), который объединяет Яндекс.Диск, Nextcloud и другие сервисы в одном окне вашего файлового менеджера (Dolphin/Nautilus).
 
 ### Ключевые фичи:
 *   **Virtual File System (FUSE):** Облака выглядят как обычные папки. Никакого скачивания всего объема данных — файлы подгружаются только при обращении.
@@ -26,7 +26,24 @@
 1.  **UI Layer (Tauri + React):** Стильный интерфейс управления аккаунтами и настройками кэша.
 2.  **Core Layer (Python 3.12 + FastAPI):** Системный демон (Sidecar), отвечающий за логику FUSE, взаимодействие с API облаков и алгоритмы кэширования.
 3.  **Data Layer (SQLite):** Локальный индекс всех метаданных для мгновенной навигации и поиска.
-4.  **VFS Layer (fusepy):** Реализация виртуальной файловой системы на уровне ядра Linux.
+4.  **VFS Layer (pyfuse3):** Реализация виртуальной файловой системы через FUSE 3.
+
+---
+
+## Почему папки на смонтированном диске были «пустыми»?
+
+Содержимое каталогов на FUSE-драйве берётся из **локального индекса SQLite**, который заполняется при старте демона из API Яндекс.Диска. Раньше вызывался только один уровень `listdir("disk:/")`: API отдаёт **только прямые** дочерние элементы корня. Вложенные файлы и папки не попадали в базу, поэтому в проводнике корень выглядел нормально, а при входе в любую подпапку — пусто (хотя в облаке там всё есть).
+
+**Исправление:** рекурсивный обход каталогов в `daemon/cloud_api/yandex.py` (`get_all_files_flat`). После обновления кода перезапустите демон; при необходимости удалите старую БД `daemon/database/cloudfusion.db`, чтобы пересобрать дерево с нуля.
+
+---
+
+## Как проверить на Ubuntu (ручной тест)
+
+1. Установите зависимости демона, авторизуйте Яндекс через UI/эндпоинты, как в вашем сценарии.
+2. Запустите демон с FUSE; в логах должны появиться строки вроде «Всего записей в индексе: …» и при открытии папки — «Найдено N элементов в БД» с **N > 0** для непустых каталогов.
+3. В терминале: `ls -la ~/CloudFusion` и `ls -la ~/CloudFusion/ИмяПапки` — списки должны совпадать с тем, что видно в веб-интерфейсе Диска.
+4. Дополнительно можно проверить SQLite: `sqlite3 daemon/database/cloudfusion.db "SELECT parent_id, COUNT(*) FROM files GROUP BY parent_id;"` — для идентификаторов папок с детьми счётчики должны быть больше нуля.
 
 ---
 
@@ -55,16 +72,29 @@
     cd disco-hack
     ```
 
-2.  **Настройте бэкенд:**
+2.  **Настройте бэкенд:** импорты внутри `daemon` — относительные, запускайте из **корня репозитория** (`disco-hack`), чтобы пакет `daemon` был виден Python.
     ```bash
+    cd disco-hack
     cd daemon
     python -m venv venv
-    source venv/bin/activate # На Windows: .\venv\Scripts\Activate.ps1
+    source venv/bin/activate
     pip install -r requirements.txt
-    python main.py
+    cd ..
+    python -m daemon.main
     ```
+    Альтернатива из корня: `python run_backend.py`. Seed: `python -m daemon.seed`.
 
-3.  **Запустите интерфейс (в другом терминале):**
+3.  **FUSE (mount) — только Linux / WSL.** Скрипт `daemon/core/mount.py` **нельзя** запускать как файл (`python .../mount.py`): относительные импорты работают только как модуль пакета `daemon` из **корня репозитория**.
+    ```bash
+    cd /mnt/c/Documents/GitHub/disco-hack
+    source daemon/venv/bin/activate
+    python run_mount.py
+    ```
+    То же самое: `python -m daemon.core.mount` из того же каталога `disco-hack`. В Windows PowerShell FUSE обычно недоступен — открой терминал **дистрибутива WSL** (Ubuntu), перейди в `cd` на путь под `/mnt/c/...` к клону и запусти команду там.
+
+    **PyCharm:** Run → Edit Configurations → **+** → Python → **Module name:** `daemon.core.mount` → **Working directory:** корень проекта (`disco-hack`, переменная `$ProjectFileDir$`). Интерпретатор — WSL, где стоят `pyfuse3` и `libfuse`. Либо **Script path:** `run_mount.py`, working directory — снова корень репо.
+
+4.  **Запустите интерфейс (в другом терминале):**
     ```bash
     npm install
     npm run tauri dev
@@ -76,7 +106,7 @@
 *   **Desktop:** [Tauri](https://tauri.app/) (Rust)
 *   **Frontend:** [React](https://reactjs.org/) + [Vite](https://vitejs.dev/)
 *   **Backend Daemon:** [Python 3.12](https://www.python.org/) + [FastAPI](https://fastapi.tiangolo.com/)
-*   **VFS:** [fusepy](https://github.com/fusepy/fusepy)
+*   **VFS:** [pyfuse3](https://github.com/libfuse/pyfuse3)
 *   **Database:** [SQLite](https://www.sqlite.org/index.html) (FTS5)
 
 ---
