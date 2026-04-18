@@ -47,6 +47,22 @@ env LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 \
   ./src-tauri/target/release/app
 ```
 
+### `libEGL` / DRI3 / «сумасшедшие» графические предупреждения
+
+Сообщения вроде **`Could not get DRI3 device`** идут от **EGL/WebKit** (WPE), а не от Python-демона. На «голом» Mesa/ВМ или без нормального DRI3 они часты.
+
+Что можно сделать:
+
+1. **Проще всего** — запуск с софтверным GL и отключением DMA-BUF для WebKit (см. блок `env` выше): часто достаточно для стабильного окна.
+2. Поставить драйверы и стек **Mesa/Vulkan** для вашей видеокарты (пакеты зависят от дистрибутива: `mesa-dri-drivers`, `mesa-libEGL`, для Intel/AMD/NVIDIA — соответствующий драйвер).
+3. Принудительно **X11** вместо Wayland для сессии, если под Wayland всё «ломается» визуально.
+
+### PyInstaller: `No module named 'nc_py_api'`
+
+- Устанавливать нужно пакет **`nc-py-api`** (через дефис в pip), в коде импорт **`nc_py_api`** (подчёркивание). Опечатка **`nc-oy-api`** в pip не существует.
+- Системный `pip install nc-py-api` под root **не подмешивает** модули внутрь уже собранного бинаря: демон собирается из **venv в корне репо** (`.venv-build-daemon`). После правок в `requirements.txt` пересоберите: `./scripts/build-linux-daemon.sh` или полный `./scripts/build-local-bundle.sh`.
+- Скрипт **`scripts/build-linux-daemon.sh`** явно ставит и `daemon/requirements-build.txt`, и **`daemon/requirements.txt`**, чтобы в venv гарантированно был `nc_py_api` для анализа PyInstaller.
+
 Конфиг демона: **`~/.config/cloudfusion/.env`** (см. `daemon/.env.example`) или экспорт в сеансе. Собранный **`cloudfusion-daemon`** без **`YANDEX_*`** сам поднимется в **mock**-режиме (сообщение в stderr); из исходников **`python -m daemon`** без ключей по-прежнему нужен **`CLOUDFUSION_MOCK_YANDEX=1`** или `.env`.
 
 Проверка API после старта окна:

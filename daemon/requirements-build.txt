@@ -1,4 +1,5 @@
 # Build-only: PyInstaller (not required on end-user machines).
+# Рантайм (в т.ч. nc-py-api → import nc_py_api) обязателен в том же venv, иначе onefile без Nextcloud.
 -r requirements.txt
 pyinstaller>=6.3.0
 pyinstaller-hooks-contrib>=2025.0

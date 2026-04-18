@@ -6,7 +6,10 @@ cd "$ROOT"
 python3 -m venv .venv-build-daemon
 # shellcheck disable=SC1091
 source .venv-build-daemon/bin/activate
+# PyInstaller упаковывает только то, что установлено в ЭТОМ venv.
+# Пакет в PyPI: nc-py-api; в коде: import nc_py_api (нижнее подчёркивание).
 pip install -r daemon/requirements-build.txt
+pip install -r daemon/requirements.txt
 # Не пишем в dist/: Vite (npm run build / tauri build) очищает dist/ и удалил бы бинарь демона.
 pyinstaller --clean -y \
   --distpath "${ROOT}/build/daemon-release" \

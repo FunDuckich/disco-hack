@@ -72,6 +72,15 @@ try:
 except Exception:
     pass
 
+import importlib.util
+
+if importlib.util.find_spec("nc_py_api") is None:
+    raise SystemExit(
+        "В venv для PyInstaller нет пакета nc-py-api (модуль nc_py_api). "
+        "Из корня репо: pip install -r daemon/requirements.txt "
+        "(см. scripts/build-linux-daemon.sh)."
+    )
+
 a = Analysis(
     [str(ROOT / "daemon" / "pyinstaller" / "entry.py")],
     pathex=[str(ROOT)],
