@@ -11,6 +11,7 @@ SPEC="$ROOT/packaging/rpm/cloudfusion.spec"
 
 usage() {
   echo "Использование: $0 [опции]" >&2
+  echo "  --pull           git pull --ff-only в РЕПО (если есть .git), затем сборка" >&2
   echo "  --skip-npm       не вызывать npm install (если node_modules уже актуален)" >&2
   echo "  --only-sources   только SOURCES, без rpmbuild -ba" >&2
   echo "  -h, --help       эта справка" >&2
@@ -19,8 +20,10 @@ usage() {
 
 SKIP_NPM=0
 ONLY_SOURCES=0
+DO_PULL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --pull) DO_PULL=1 ;;
     --skip-npm) SKIP_NPM=1 ;;
     --only-sources) ONLY_SOURCES=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -35,6 +38,18 @@ need_cmd() {
     exit 1
   fi
 }
+
+if [[ "$DO_PULL" -eq 1 ]]; then
+  if [[ -d "$ROOT/.git" ]] && command -v git >/dev/null 2>&1; then
+    echo "== git pull --ff-only =="
+    (cd "$ROOT" && git pull --ff-only) || {
+      echo "Ошибка: git pull --ff-only не удался (конфликт или нет сети)." >&2
+      exit 1
+    }
+  else
+    echo "Предупреждение: --pull пропущен (нет .git или git)." >&2
+  fi
+fi
 
 echo "== CloudFusion: проверка инструментов =="
 for c in git python3 node npm cargo rpmbuild; do
@@ -59,20 +74,22 @@ if [[ ! -f daemon/.env ]]; then
   fi
 fi
 
-echo "== 1/5 PyInstaller: cloudfusion-daemon =="
-chmod +x "$ROOT/scripts/build-linux-daemon.sh"
-"$ROOT/scripts/build-linux-daemon.sh"
-test -f "$ROOT/dist/cloudfusion-daemon" || { echo "Ошибка: нет dist/cloudfusion-daemon" >&2; exit 1; }
-
+# Порядок важен: Vite кладёт фронт в dist/ и может очистить каталог — демон собираем в build/daemon-release/ ПОСЛЕ tauri build.
 if [[ "$SKIP_NPM" -eq 0 ]]; then
-  echo "== 2/5 npm install =="
+  echo "== 1/5 npm install =="
   (cd "$ROOT" && npm install)
 else
-  echo "== 2/5 npm install (пропуск --skip-npm) =="
+  echo "== 1/5 npm install (пропуск --skip-npm) =="
 fi
 
-echo "== 3/5 Tauri release =="
+echo "== 2/5 Tauri release =="
 (cd "$ROOT" && npm run tauri build)
+
+DAEMON_BIN="${ROOT}/build/daemon-release/cloudfusion-daemon"
+echo "== 3/5 PyInstaller: cloudfusion-daemon → ${DAEMON_BIN} =="
+chmod +x "$ROOT/scripts/build-linux-daemon.sh"
+"$ROOT/scripts/build-linux-daemon.sh"
+test -f "$DAEMON_BIN" || { echo "Ошибка: нет ${DAEMON_BIN}" >&2; exit 1; }
 
 GUI=""
 if [[ -x "$ROOT/src-tauri/target/release/cloudfusion" ]]; then
@@ -91,7 +108,7 @@ fi
 echo "== 4/5 Копирование в $RPM_TOP/SOURCES =="
 mkdir -p "$RPM_TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 install -m0755 "$GUI" "$RPM_TOP/SOURCES/cloudfusion"
-install -m0755 "$ROOT/dist/cloudfusion-daemon" "$RPM_TOP/SOURCES/cloudfusion-daemon"
+install -m0755 "$DAEMON_BIN" "$RPM_TOP/SOURCES/cloudfusion-daemon"
 install -m0755 "$ROOT/integration/scripts/share_bridge.py" "$RPM_TOP/SOURCES/share_bridge.py"
 install -m0644 "$ROOT/integration/desktop/cloudfusion-link.desktop" "$RPM_TOP/SOURCES/cloudfusion-link.desktop"
 install -m0644 "$ROOT/integration/desktop/cloudfusion-app.desktop" "$RPM_TOP/SOURCES/cloudfusion-app.desktop"

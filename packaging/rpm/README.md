@@ -8,7 +8,7 @@
 
 | Способ | Когда |
 |--------|--------|
-| **[`scripts/build-cloudfusion-rpm.sh`](../../scripts/build-cloudfusion-rpm.sh)** | Обычный случай: одна команда после установки пакетов ОС. |
+| **[`build-rpm.sh`](../../build-rpm.sh)** (корень РЕПО) или **[`scripts/build-cloudfusion-rpm.sh`](../../scripts/build-cloudfusion-rpm.sh)** | Обычный случай: одна команда после установки пакетов ОС. |
 | **Шаги 1–8 ниже** | Нужен контроль каждого шага, отладка или нестандартный `_topdir`. |
 
 ---
@@ -17,38 +17,49 @@
 
 **Перед первым запуском** установите зависимости сборщика — см. раздел **«Пакеты на машине сборщика»** ниже в этом файле.
 
-Запуск из **РЕПО**:
+Запуск из **РЕПО** (оба варианта эквивалентны):
+
+```bash
+./build-rpm.sh
+```
 
 ```bash
 ./scripts/build-cloudfusion-rpm.sh
 ```
 
-(После `git clone` бит исполняемости уже выставлен в репозитории; если shell пишет «Отказано в доступу» — один раз: `chmod +x scripts/build-cloudfusion-rpm.sh`.)
+Если скрипта ещё нет (старый клон): **`git pull`**, затем при отказе в доступе: **`chmod +x build-rpm.sh scripts/build-cloudfusion-rpm.sh`**.
+
+Обновить код и собрать за один проход (нужен настроенный **`git pull`** для текущей ветки):
+
+```bash
+./build-rpm.sh --pull
+```
 
 **Что делает скрипт**
 
-1. Проверяет наличие в `PATH`: `git`, `python3`, `node`, `npm`, `cargo`, `rpmbuild`.
-2. Если установлен **`dos2unix`**, приводит к Unix переводам строк в [`cloudfusion.spec`](cloudfusion.spec) (снимает типичные проблемы после клона с Windows).
-3. Если нет **`daemon/.env`**, копирует из **`daemon/.env.example`** и напоминает заполнить **`YANDEX_*`** (для **запуска** демона; сама сборка PyInstaller от этого не зависит).
-4. Запускает **[`scripts/build-linux-daemon.sh`](../../scripts/build-linux-daemon.sh)** → появляется **`dist/cloudfusion-daemon`**.
-5. **`npm install`** (пропуск: **`./scripts/build-cloudfusion-rpm.sh --skip-npm`**).
-6. **`npm run tauri build`** → ELF в **`src-tauri/target/release/`** (`app` или `cloudfusion`).
-7. Копирует **пять файлов** в **`$RPMBUILD_TOPDIR/SOURCES`** (по умолчанию **`~/rpmbuild`**): GUI как **`cloudfusion`**, демон, `share_bridge.py`, два `.desktop`.
-8. **`rpmbuild -ba --define "_topdir …"`** — готовый RPM в **`$RPMBUILD_TOPDIR/RPMS/`** (часто **`…/RPMS/x86_64/`**).
+1. Опционально **`--pull`**: **`git pull --ff-only`** в РЕПО.
+2. Проверяет в `PATH`: **`git`**, **`python3`**, **`node`**, **`npm`**, **`cargo`**, **`rpmbuild`**.
+3. При наличии **`dos2unix`** — переводы строк в [`cloudfusion.spec`](cloudfusion.spec).
+4. При отсутствии **`daemon/.env`** — копия из **`daemon/.env.example`** (заполните **`YANDEX_*`** для запуска демона).
+5. **`npm install`** (пропуск: **`--skip-npm`**).
+6. **`npm run tauri build`** (Vite пишет во **`dist/`**).
+7. **[`build-linux-daemon.sh`](../../scripts/build-linux-daemon.sh)** — PyInstaller кладёт бинарь в **`build/daemon-release/cloudfusion-daemon`**, не в **`dist/`**, чтобы фронт его не затёр.
+8. Копирование пяти файлов в **`$RPMBUILD_TOPDIR/SOURCES`**.
+9. **`rpmbuild -ba --define "_topdir …"`** → **`$RPMBUILD_TOPDIR/RPMS/`**.
 
 **Дополнительно**
 
 ```bash
-./scripts/build-cloudfusion-rpm.sh --only-sources
+./build-rpm.sh --only-sources
 ```
 
-Только шаги 1–7 без **`rpmbuild`** (удобно проверить SOURCES). Другой каталог вместо **`~/rpmbuild`**:
+Только подготовка **`SOURCES`** без **`rpmbuild`**. Другой каталог:
 
 ```bash
-RPMBUILD_TOPDIR=/tmp/my-rpm ./scripts/build-cloudfusion-rpm.sh
+RPMBUILD_TOPDIR=/tmp/my-rpm ./build-rpm.sh
 ```
 
-Справка по флагам: **`./scripts/build-cloudfusion-rpm.sh --help`**.
+Справка: **`./build-rpm.sh --help`**.
 
 ---
 
@@ -180,6 +191,7 @@ which rpmbuild
 | **npm** | Пакет ОС (см. блоки выше). |
 | **Зависимости фронта и Tauri CLI** | **`npm install`** в **РЕПО** → **`РЕПО/node_modules/`** (в т.ч. **`node_modules/.bin/tauri`**). |
 | **Сборка окна** | **`npm run tauri build`** в **РЕПО** использует локальный CLI и системный **cargo**. |
+| **Сборка демона (PyInstaller)** | Скрипт **`build-linux-daemon.sh`** пишет во **`build/daemon-release/`**, не в **`dist/`**: иначе **`vite build`** при Tauri перезаписывает **`dist/`** и бинарь демона пропадает. |
 
 Отдельно «установить Tauri» с сайта **не нужно**.
 
@@ -218,27 +230,13 @@ YANDEX_CLIENT_ID=...
 YANDEX_CLIENT_SECRET=...
 ```
 
-### Шаг 3. Демон (PyInstaller)
-
-```bash
-chmod +x scripts/build-linux-daemon.sh
-```
-
-```bash
-./scripts/build-linux-daemon.sh
-```
-
-```bash
-test -f dist/cloudfusion-daemon && echo OK || echo FAIL
-```
-
-### Шаг 4. Node-зависимости
+### Шаг 3. Node-зависимости
 
 ```bash
 npm install
 ```
 
-### Шаг 5. Tauri release
+### Шаг 4. Tauri release
 
 ```bash
 npm run tauri build
@@ -250,10 +248,26 @@ npm run tauri build
 npx tauri build
 ```
 
-Проверка ELF:
+Проверка ELF приложения:
 
 ```bash
 ls -la src-tauri/target/release/
+```
+
+### Шаг 5. Демон (PyInstaller)
+
+**После** шага 4: иначе Vite очистит **`dist/`** и бинарь демона пропадёт. Результат: **`build/daemon-release/cloudfusion-daemon`**.
+
+```bash
+chmod +x scripts/build-linux-daemon.sh
+```
+
+```bash
+./scripts/build-linux-daemon.sh
+```
+
+```bash
+test -f build/daemon-release/cloudfusion-daemon && echo OK || echo FAIL
 ```
 
 ### Шаг 6. Заполнить `SOURCES`
@@ -279,7 +293,7 @@ chmod +x ~/rpmbuild/SOURCES/cloudfusion
 ```
 
 ```bash
-cp dist/cloudfusion-daemon ~/rpmbuild/SOURCES/cloudfusion-daemon
+cp build/daemon-release/cloudfusion-daemon ~/rpmbuild/SOURCES/cloudfusion-daemon
 ```
 
 ```bash
@@ -338,7 +352,7 @@ kquitapp5 dolphin
 | `cargo: command not found` | Пакет **`rust`**/**`cargo`** дистрибутива или **rustup** + **`source ~/.cargo/env`**. |
 | `javascriptcoregtk-4.1` / `No package 'javascriptcoregtk-4.1' found` | На **ALT p11**: **`libwebkit2gtk4.1-devel`**. Имена вроде **`libwebkit2gtk-4.1-dev`** — это **Debian/Ubuntu**. |
 | `failed to run linuxdeploy` / `mtr-packet` | В актуальном репозитории **AppImage** отключён в **`tauri.conf.json`**. Обновите клон или уберите **AppImage** из **`bundle.targets`**. |
-| `cp: ... dist/cloudfusion-daemon` | Шаг **3** или скрипт **`build-linux-daemon.sh`**. |
+| `install: ... cloudfusion-daemon: Нет такого файла` | Собирайте демон **после** **`npm run tauri build`** или пользуйтесь **`./build-rpm.sh`**. Бинарь: **`build/daemon-release/cloudfusion-daemon`** (не **`dist/`**). |
 | `Файл ... cloudfusion.spec не похож на файл спецификации` | Часто **CRLF**: **`dos2unix packaging/rpm/cloudfusion.spec`**, проверка **`file`** / **`head`**. |
 | `rpmbuild: command not found` | Пакет **`rpm-build`** (или аналог в вашем дистрибутиве). |
 

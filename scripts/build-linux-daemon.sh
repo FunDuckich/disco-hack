@@ -7,6 +7,10 @@ python3 -m venv .venv-build-daemon
 # shellcheck disable=SC1091
 source .venv-build-daemon/bin/activate
 pip install -r daemon/requirements-build.txt
-pyinstaller --clean -y daemon/pyinstaller/cloudfusion-daemon.spec
-echo "Готово: ${ROOT}/dist/cloudfusion-daemon"
-echo "Для RPM: cp dist/cloudfusion-daemon packaging/rpm/SOURCES/ (или см. packaging/rpm/README.md)"
+# Не пишем в dist/: Vite (npm run build / tauri build) очищает dist/ и удалил бы бинарь демона.
+pyinstaller --clean -y \
+  --distpath "${ROOT}/build/daemon-release" \
+  --workpath "${ROOT}/build/daemon-work" \
+  daemon/pyinstaller/cloudfusion-daemon.spec
+echo "Готово: ${ROOT}/build/daemon-release/cloudfusion-daemon"
+echo "Для RPM: см. scripts/build-cloudfusion-rpm.sh или packaging/rpm/README.md"

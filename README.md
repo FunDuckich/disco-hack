@@ -63,13 +63,15 @@
 
 1. Клонировать репозиторий и перейти в корень (**РЕПО**).
 2. Один раз поставить пакеты сборщика (ALT или Fedora) — **готовые команды по одной строке** в начале [packaging/rpm/README.md](packaging/rpm/README.md) (в т.ч. **`libwebkit2gtk4.1-devel`** для Tauri на ALT p11).
-3. Запустить **[`scripts/build-cloudfusion-rpm.sh`](scripts/build-cloudfusion-rpm.sh)** из РЕПО (ставит `SOURCES`, вызывает `rpmbuild`; пакеты ОС сам не ставит):
+3. Запустить из РЕПО **[`build-rpm.sh`](build-rpm.sh)** (или то же самое: [`scripts/build-cloudfusion-rpm.sh`](scripts/build-cloudfusion-rpm.sh)). Пакеты ОС скрипт **не** ставит; подготавливает **`SOURCES`** и вызывает **`rpmbuild`**.
 
 ```bash
-./scripts/build-cloudfusion-rpm.sh
+./build-rpm.sh
 ```
 
-Скрипт по очереди: проверка `git` / `python3` / `node` / `npm` / `cargo` / `rpmbuild` → при необходимости `dos2unix` для spec → при отсутствии **`daemon/.env`** копирует из [`daemon/.env.example`](daemon/.env.example) → [`scripts/build-linux-daemon.sh`](scripts/build-linux-daemon.sh) → `npm install` → `npm run tauri build` → копирование в **`$RPMBUILD_TOPDIR/SOURCES`** (по умолчанию **`~/rpmbuild`**) → **`rpmbuild -ba`**. Опции: **`--skip-npm`**, **`--only-sources`**, переменная **`RPMBUILD_TOPDIR`**.
+Опционально сначала подтянуть коммиты: **`./build-rpm.sh --pull`** (нужен **`git`** и настроенный **`git pull`** для ветки).
+
+Порядок внутри скрипта: проверки инструментов → при необходимости **`dos2unix`** для spec → **`daemon/.env`** из примера → **`npm install`** → **`npm run tauri build`** → **[`scripts/build-linux-daemon.sh`](scripts/build-linux-daemon.sh)** (бинарь демона в **`build/daemon-release/`**, не в **`dist/`**, чтобы Vite его не стёр) → копирование в **`$RPMBUILD_TOPDIR/SOURCES`** → **`rpmbuild -ba`**. Флаги: **`--skip-npm`**, **`--only-sources`**, **`RPMBUILD_TOPDIR`**.
 
 4. Готовый файл: **`~/rpmbuild/RPMS/x86_64/cloudfusion-*.rpm`** (или подкаталог `RPMS` вашего `_topdir`).
 

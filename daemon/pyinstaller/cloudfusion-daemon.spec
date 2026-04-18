@@ -2,7 +2,7 @@
 # Сборка из корня репозитория:
 #   pip install -r daemon/requirements-build.txt
 #   pyinstaller --clean -y daemon/pyinstaller/cloudfusion-daemon.spec
-# Результат: dist/cloudfusion-daemon (один файл, Linux x86_64).
+# Результат: build/daemon-release/cloudfusion-daemon (один файл; distpath задаётся в build-linux-daemon.sh).
 from pathlib import Path
 
 SPECDIR = Path(SPECPATH).resolve()
