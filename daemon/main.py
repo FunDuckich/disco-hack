@@ -18,7 +18,7 @@ from .cloud_api.yandex import YandexDiskAsyncClient
 from .core.lru_engine import run_lru_cleanup
 from .core.yandex_folder_sync import merge_last_uploaded, sync_yandex_folder_if_stale
 from .database.manager import DBManager
-from config import settings
+from .config import settings
 
 
 logging.basicConfig(
@@ -38,37 +38,6 @@ except ImportError as e:
     _FUSE_AVAILABLE = False
     _FUSE_IMPORT_ERROR = e
 
-
-app = FastAPI(title="CloudFusion", lifespan=lifespan)
-
-app.add_middleware(LoggingMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:1420", "http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/api/auth/login")
-def login_route():
-    url = YandexAuthenticator.get_login_url()
-    webbrowser.open(url)
-    return {"status": "browser_opened"}
-
-
-@app.get("/callback", response_class=HTMLResponse)
-async def yandex_callback(code: str = Query(...)):
-    token = YandexAuthenticator.get_token_from_code(code)
-
-    if token:
-        await db.set_config("yandex_token", token)
-        print(f"🔥 Токен успешно сохранен в БД")
-        return "<h1>Успешно! Теперь вернитесь в приложение.</h1>"
-    else:
-        return "<h1>Ошибка авторизации</h1>"
-
-
 async def lru_scheduler():
     while True:
         try:
@@ -77,7 +46,7 @@ async def lru_scheduler():
             log.exception("LRU cleanup failed")
         await asyncio.sleep(600)
 
-        
+
 async def _cancel(task: asyncio.Task | None) -> None:
     if task is None or task.done():
         return
@@ -130,6 +99,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/api/auth/login")
+def login_route():
+    url = YandexAuthenticator.get_login_url()
+    webbrowser.open(url)
+    return {"status": "browser_opened"}
+
+
+@app.get("/callback", response_class=HTMLResponse)
+async def yandex_callback(code: str = Query(...)):
+    token = YandexAuthenticator.get_token_from_code(code)
+
+    if token:
+        await db.set_config("yandex_token", token)
+        print(f"🔥 Токен успешно сохранен в БД")
+        return "<h1>Успешно! Теперь вернитесь в приложение.</h1>"
+    else:
+        return "<h1>Ошибка авторизации</h1>"
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
