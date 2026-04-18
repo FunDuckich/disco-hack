@@ -217,7 +217,14 @@ class CloudFusionVFS(pyfuse3.Operations):
             if not row or row.get("is_dir") or row.get("status") != "stub":
                 return
             t = self._stub_download_tasks.get(db_id)
-            if t is not None and not t.done():
+            if t is not None:
+                if not t.done():
+                    return
+                if t.exception() is None:
+                    return
+                self._stub_download_tasks.pop(db_id, None)
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row or row.get("status") != "stub":
                 return
             self._stub_download_tasks[db_id] = asyncio.create_task(
                 self._stub_download_worker(db_id)
@@ -262,7 +269,11 @@ class CloudFusionVFS(pyfuse3.Operations):
         want_end = off + size
         if total_hint > 0:
             want_end = min(want_end, total_hint)
+        deadline = time.monotonic() + 7200.0
         while True:
+            if time.monotonic() > deadline:
+                await self._stub_await_fully_cached(db_id)
+                return
             row = await self.db_manager.get_file_by_id(db_id)
             if row.get("status") == "cached":
                 return
@@ -276,13 +287,12 @@ class CloudFusionVFS(pyfuse3.Operations):
                 exc = t.exception()
                 if exc is not None:
                     raise pyfuse3.FUSEError(errno.EIO) from exc
-                if clen > off or (total_hint > 0 and off >= total_hint):
-                    return
-                if await asyncio.to_thread(os.path.isfile, local_path):
-                    clen2 = await asyncio.to_thread(_sync_file_size, local_path)
-                    if clen2 > off or clen2 >= want_end:
-                        return
-                raise pyfuse3.FUSEError(errno.EIO)
+                if row.get("status") == "stub":
+                    await asyncio.sleep(_STUB_READ_POLL_SEC)
+                    continue
+                return
+            if t is None and row.get("status") == "stub":
+                await self._stub_start_or_join_download(db_id)
             await asyncio.sleep(_STUB_READ_POLL_SEC)
 
     async def _stub_await_fully_cached(self, db_id: int) -> None:
@@ -375,14 +385,20 @@ class CloudFusionVFS(pyfuse3.Operations):
             entry.st_nlink = 1
             entry.st_blksize = 4096
             lp = row.get("local_path")
+            stub_part = self._stub_cache_path(db_id, row["name"])
+            status = row.get("status")
 
-            def _attr_size_for_file(local_p, row_size):
+            def _attr_size_for_file(local_p, row_size, stub_p, st):
+                if st == "stub" and stub_p and os.path.isfile(stub_p):
+                    return os.path.getsize(stub_p)
                 if local_p and os.path.isfile(local_p):
                     return os.path.getsize(local_p)
+                if st == "stub":
+                    return 0
                 return row_size
 
             entry.st_size = await asyncio.to_thread(
-                _attr_size_for_file, lp, row["size"]
+                _attr_size_for_file, lp, row["size"], stub_part, status
             )
             sz = int(entry.st_size)
             entry.st_blocks = (sz + 511) // 512 if sz else 0
@@ -461,7 +477,14 @@ class CloudFusionVFS(pyfuse3.Operations):
                 attr.st_blocks = 0
             else:
                 attr.st_nlink = 1
-                sz = int(row.get("size") or 0)
+                if row.get("status") == "stub":
+                    sp = self._stub_cache_path(row["id"], row["name"])
+                    sz = await asyncio.to_thread(
+                        lambda p: os.path.getsize(p) if os.path.isfile(p) else 0,
+                        sp,
+                    )
+                else:
+                    sz = int(row.get("size") or 0)
                 attr.st_size = sz
                 attr.st_blksize = 4096
                 attr.st_blocks = (sz + 511) // 512 if sz else 0
@@ -608,7 +631,14 @@ class CloudFusionVFS(pyfuse3.Operations):
             cache_lp = self._stub_cache_path(db_id, row["name"])
             await self._stub_start_or_join_download(db_id)
             total_hint = int(row.get("size") or 0)
-            await self._stub_wait_readable(db_id, cache_lp, off, size, total_hint)
+            clen0 = 0
+            if await asyncio.to_thread(os.path.isfile, cache_lp):
+                clen0 = await asyncio.to_thread(_sync_file_size, cache_lp)
+            # Перемотка далеко вперёд линейного потока скачивания — ждём полный файл (иначе долго/висим).
+            if off > clen0 + 256 * 1024:
+                await self._stub_await_fully_cached(db_id)
+            else:
+                await self._stub_wait_readable(db_id, cache_lp, off, size, total_hint)
             row = await self.db_manager.get_file_by_id(db_id)
 
         local_path = row.get("local_path")

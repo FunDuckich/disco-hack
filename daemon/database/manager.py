@@ -190,7 +190,7 @@ class DBManager:
 
     async def get_readdir_entries(self, parent_id: int):
         db = await self.get_db()
-        query = "SELECT id, name, is_dir, size FROM files WHERE parent_id IS ?"
+        query = "SELECT id, name, is_dir, size, status FROM files WHERE parent_id IS ?"
         async with db.execute(query, (parent_id,)) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
