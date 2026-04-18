@@ -68,18 +68,7 @@
     python -m daemon.core.mount
     ```
     
-
-4.  **FUSE (mount) — только Linux / WSL.** Скрипт `daemon/core/mount.py` **нельзя** запускать как файл (`python .../mount.py`): относительные импорты работают только как модуль пакета `daemon` из **корня репозитория**.
-    ```bash
-    cd /mnt/c/Documents/GitHub/disco-hack
-    source daemon/venv/bin/activate
-    python run_mount.py
-    ```
-    То же самое: `python -m daemon.core.mount` из того же каталога `disco-hack`. В Windows PowerShell FUSE обычно недоступен — открой терминал **дистрибутива WSL** (Ubuntu), перейди в `cd` на путь под `/mnt/c/...` к клону и запусти команду там.
-
-    **PyCharm:** Run → Edit Configurations → **+** → Python → **Module name:** `daemon.core.mount` → **Working directory:** корень проекта (`disco-hack`, переменная `$ProjectFileDir$`). Интерпретатор — WSL, где стоят `pyfuse3` и `libfuse`. Либо **Script path:** `run_mount.py`, working directory — снова корень репо.
-
-5.  **Запустите интерфейс (в другом терминале):**
+3.  **Запустите интерфейс (в другом терминале):**
     ```bash
     npm install
     npm run tauri dev
