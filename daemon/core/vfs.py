@@ -28,6 +28,41 @@ _GET_META_TIMEOUT = 60.0
 _STUB_READ_POLL_SEC = 0.05
 
 
+def _stub_cache_path_for(db_id: int, name: str) -> str:
+    cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+    return os.path.join(cache_dir, f"{db_id}_{name}")
+
+
+def _st_size_for_file_row(row: dict) -> int:
+    """Согласованный st_size для getattr/readdir (учёт кэша и частичной загрузки stub)."""
+    if row.get("is_dir"):
+        return 0
+    lp = row.get("local_path")
+    if lp:
+        try:
+            if os.path.isfile(lp):
+                return os.path.getsize(lp)
+        except OSError:
+            pass
+    if row.get("status") == "stub":
+        rid = row.get("id")
+        name = row.get("name") or ""
+        if rid is not None:
+            stub = _stub_cache_path_for(int(rid), name)
+            try:
+                if os.path.isfile(stub):
+                    return os.path.getsize(stub)
+            except OSError:
+                pass
+    return int(row.get("size") or 0)
+
+
+def _fuse_attr_cache_minimal(entry: pyfuse3.EntryAttributes) -> None:
+    """Короткий TTL кэша stat в ядре — иначе Dolphin держит устаревший размер (превью)."""
+    entry.entry_timeout = 0.0
+    entry.attr_timeout = 0.0
+
+
 def _sync_read_bytes(path: str, off: int, size: int) -> bytes:
     with open(path, "rb") as f:
         f.seek(off)
@@ -191,6 +226,7 @@ class CloudFusionVFS(pyfuse3.Operations):
                 status="cached",
                 local_path=final,
             )
+            _invalidate_inode_async(self._get_inode(db_id))
         except asyncio.CancelledError:
             log.info("FUSE async finalize upload отменён db_id=%s", db_id)
             if await asyncio.to_thread(os.path.isfile, temp):
@@ -219,8 +255,7 @@ class CloudFusionVFS(pyfuse3.Operations):
 
     @staticmethod
     def _stub_cache_path(db_id: int, name: str) -> str:
-        cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
-        return os.path.join(cache_dir, f"{db_id}_{name}")
+        return _stub_cache_path_for(db_id, name)
 
     async def _stub_start_or_join_download(self, db_id: int) -> None:
         async with self._stub_lock(db_id):
@@ -248,6 +283,7 @@ class CloudFusionVFS(pyfuse3.Operations):
             log.info("FUSE: загрузка в кэш (фон) %s...", row["name"])
             await target.download(row["remote_path"], local_path)
             await self.db_manager.update_downloaded_file(db_id, local_path)
+            _invalidate_inode_async(self._get_inode(db_id))
         except Exception:
             log.exception("FUSE stub download db_id=%s", db_id)
             raise
@@ -363,12 +399,14 @@ class CloudFusionVFS(pyfuse3.Operations):
             entry.st_nlink = 2
             entry.st_blksize = 4096
             entry.st_blocks = 0
+            _fuse_attr_cache_minimal(entry)
             return entry
 
         row = await self.db_manager.get_file_by_id(db_id)
         if not row:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
+        row["id"] = db_id
         if row["is_dir"]:
             entry.st_mode = stat.S_IFDIR | 0o755
             entry.st_size = 0
@@ -379,23 +417,22 @@ class CloudFusionVFS(pyfuse3.Operations):
             entry.st_mode = stat.S_IFREG | 0o644
             entry.st_nlink = 1
             entry.st_blksize = 4096
-            lp = row.get("local_path")
-
-            def _attr_size_for_file(local_p, row_size):
-                if local_p and os.path.isfile(local_p):
-                    return os.path.getsize(local_p)
-                return row_size
-
-            entry.st_size = await asyncio.to_thread(
-                _attr_size_for_file, lp, row["size"]
-            )
+            entry.st_size = await asyncio.to_thread(_st_size_for_file_row, row)
             sz = int(entry.st_size)
             entry.st_blocks = (sz + 511) // 512 if sz else 0
 
+        _fuse_attr_cache_minimal(entry)
         return entry
 
     async def access(self, inode, mode, ctx):
         return True
+
+    async def fsync(self, fh, datasync):
+        """KIO/Qt при превью вызывают fsync; ENOSYS по умолчанию ломает цепочку миниатюр."""
+        return
+
+    async def fsyncdir(self, fh, datasync):
+        return
 
     async def statfs(self, ctx):
         s = pyfuse3.StatvfsData()
@@ -476,11 +513,12 @@ class CloudFusionVFS(pyfuse3.Operations):
                 attr.st_blocks = 0
             else:
                 attr.st_nlink = 1
-                sz = int(row.get("size") or 0)
+                sz = _st_size_for_file_row(row)
                 attr.st_size = sz
                 attr.st_blksize = 4096
                 attr.st_blocks = (sz + 511) // 512 if sz else 0
 
+            _fuse_attr_cache_minimal(attr)
             if not pyfuse3.readdir_reply(token, row["name"].encode("utf-8"), attr, i + 1):
                 break
 
@@ -523,7 +561,11 @@ class CloudFusionVFS(pyfuse3.Operations):
         if accmode == os.O_RDONLY:
             if row.get("status") == "stub":
                 asyncio.create_task(self._stub_start_or_join_download(db_id))
-            return pyfuse3.FileInfo(fh=inode)
+            fi = pyfuse3.FileInfo(fh=inode)
+            fi.direct_io = False
+            if row.get("status") == "cached" and row.get("local_path"):
+                fi.keep_cache = True
+            return fi
 
         if accmode in (os.O_WRONLY, os.O_RDWR):
             if not _writable_cloud_type(row.get("cloud_type")):
