@@ -19,7 +19,7 @@ from .core.yandex_folder_sync import merge_last_uploaded, sync_yandex_folder_if_
 from .database.manager import DBManager
 from .config import settings
 from pydantic import BaseModel
-from ..cloud_api.nextcloud import NextcloudAsyncClient
+from .cloud_api.nextcloud import NextcloudAsyncClient
 
 class NextcloudInit(BaseModel):
     host: str
@@ -162,7 +162,7 @@ async def poll_nextcloud_token(host: str, poll_endpoint: str, poll_token: str):
 
             elif response.status_code == 404:
                 # 404 означает "Юзер еще не нажал кнопку разрешить". Просто ждем.
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
             else:
                 print("Ошибка при polling:", response.text)
                 break
