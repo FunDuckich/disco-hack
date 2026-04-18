@@ -2,7 +2,6 @@ import logging
 import os
 
 import aiosqlite
-import os
 
 from ..api.schemas import FileItem
 
