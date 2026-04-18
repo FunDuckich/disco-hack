@@ -16,6 +16,24 @@ log = logging.getLogger(__name__)
 _WRITE_FH_BASE = 1 << 30
 
 
+def _sync_read_bytes(path: str, off: int, size: int) -> bytes:
+    with open(path, "rb") as f:
+        f.seek(off)
+        return f.read(size)
+
+
+def _sync_write_bytes(path: str, off: int, buf: bytes) -> int:
+    with open(path, "r+b") as f:
+        f.seek(off)
+        f.write(buf)
+        return len(buf)
+
+
+def _sync_truncate(path: str, size: int) -> None:
+    with open(path, "r+b") as f:
+        f.truncate(size)
+
+
 def _remote_child(parent_remote: str | None, name: str) -> str:
     pr = parent_remote if parent_remote is not None else "disk:/"
     p = pr.rstrip("/")
@@ -231,7 +249,7 @@ class CloudFusionVFS(pyfuse3.Operations):
             if flags & os.O_TRUNC:
                 open(temp, "wb").close()
             elif row.get("local_path") and os.path.isfile(row["local_path"]):
-                shutil.copy2(row["local_path"], temp)
+                await asyncio.to_thread(shutil.copy2, row["local_path"], temp)
             elif row["status"] == "stub":
                 wc = self._client_for_cloud_type(row.get("cloud_type"))
                 if not wc:
@@ -308,9 +326,7 @@ class CloudFusionVFS(pyfuse3.Operations):
             if not os.path.isfile(temp):
                 raise pyfuse3.FUSEError(errno.EIO)
             try:
-                with open(temp, "rb") as f:
-                    f.seek(off)
-                    return f.read(size)
+                return await asyncio.to_thread(_sync_read_bytes, temp, off, size)
             except OSError as e:
                 log.error("FUSE read temp: %s", e)
                 raise pyfuse3.FUSEError(errno.EIO) from e
@@ -328,9 +344,7 @@ class CloudFusionVFS(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EIO)
 
         try:
-            with open(local_path, "rb") as f:
-                f.seek(off)
-                return f.read(size)
+            return await asyncio.to_thread(_sync_read_bytes, local_path, off, size)
         except OSError as e:
             log.error("FUSE read: %s", e)
             raise pyfuse3.FUSEError(errno.EIO) from e
@@ -340,14 +354,12 @@ class CloudFusionVFS(pyfuse3.Operations):
         if not h:
             raise pyfuse3.FUSEError(errno.EBADF)
         try:
-            with open(h["temp"], "r+b") as f:
-                f.seek(off)
-                f.write(buf)
+            n = await asyncio.to_thread(_sync_write_bytes, h["temp"], off, buf)
             h["dirty"] = True
         except OSError as e:
             log.error("FUSE write: %s", e)
             raise pyfuse3.FUSEError(errno.EIO) from e
-        return len(buf)
+        return n
 
     async def release(self, fh):
         h = self._write_handles.pop(fh, None)
@@ -396,8 +408,12 @@ class CloudFusionVFS(pyfuse3.Operations):
         if not h:
             return
         try:
-            with open(h["temp"], "r+b"):
-                pass
+
+            def _touch():
+                with open(h["temp"], "r+b"):
+                    pass
+
+            await asyncio.to_thread(_touch)
         except OSError:
             pass
 
@@ -407,8 +423,7 @@ class CloudFusionVFS(pyfuse3.Operations):
             if fh is not None:
                 h = self._write_handles.get(fh)
                 if h:
-                    with open(h["temp"], "r+b") as f:
-                        f.truncate(size)
+                    await asyncio.to_thread(_sync_truncate, h["temp"], size)
                     h["dirty"] = True
                     return await self.getattr(h["inode"])
             db_id = self.inode_2_dbid.get(inode)
@@ -419,8 +434,7 @@ class CloudFusionVFS(pyfuse3.Operations):
                 raise pyfuse3.FUSEError(errno.EROFS)
             lp = row.get("local_path")
             if lp and os.path.isfile(lp):
-                with open(lp, "r+b") as f:
-                    f.truncate(size)
+                await asyncio.to_thread(_sync_truncate, lp, size)
                 await self.db_manager.update_yandex_entry_meta(db_id, size=size)
             else:
                 raise pyfuse3.FUSEError(errno.EINVAL)
