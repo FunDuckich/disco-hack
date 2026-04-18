@@ -38,17 +38,20 @@ Node.js и npm (для `npm install` и `tauri build` в РЕПО):
 apt-get install -y nodejs npm
 ```
 
-Библиотеки для линковки **Tauri** (GTK / WebKit). Если какого-то имени нет — найдите аналог:
+**Tauri на ALT p11** (ошибка `javascriptcoregtk-4.1` / `pkg-config`): имена **не** как в Debian (`libwebkit2gtk-4.1-dev` там не найдётся). На p11 достаточно одного метапакета разработки WebKit 4.1 — подтянутся `libjavascriptcoregtk4.1-devel` и заголовки:
 
 ```bash
-apt-cache search webkit | grep -i devel
-apt-cache search gtk | grep -i devel
+apt-get install -y libwebkit2gtk4.1-devel
 ```
 
-Пример набора (имена на вашей ветке ALT могут отличаться — смотрите вывод поиска выше):
+Дополнительно (если `cargo` всё ещё ругается на GTK / soup / rsvg):
 
 ```bash
-apt-get install -y libgtk+3-devel libwebkit2gtk-devel librsvg-devel libsoup-devel
+apt-cache search webkit2gtk | grep devel
+```
+
+```bash
+apt-get install -y libgtk+3-devel librsvg-devel libsoup-devel
 ```
 
 Один раз создать дерево каталогов для `rpmbuild` (если ещё не создавали):
@@ -217,6 +220,8 @@ npm install
 
 ## Шаг 5. Сборка графического приложения (Tauri)
 
+В репозитории в [`src-tauri/tauri.conf.json`](../../src-tauri/tauri.conf.json) для Linux включены только цели **`deb`** и **`rpm`** у Tauri-бандлера (без **AppImage**): на части систем `linuxdeploy` падает при обходе каталогов вроде `/usr/bin/mtr-packet` с «Permission denied». Сам **бинарь** `app` в `target/release/` при этом собирается как раньше; для нашего **отдельного** RPM по [`cloudfusion.spec`](cloudfusion.spec) нужен именно этот ELF.
+
 Попробовать основную команду:
 
 ```bash
@@ -335,7 +340,10 @@ kquitapp5 dolphin
 |-----------|-------------|
 | `npm: command not found` | Вернитесь к блоку установки **Node/npm** для вашей ОС. |
 | `cargo: command not found` | Установите Rust из дистрибутива или блок **rustup** выше, затем `source ~/.cargo/env`. |
-| Ошибки линковки **webkit / gtk** при `tauri build` | Доустановьте `-devel` пакеты; точные имена — через `apt-cache search` / `dnf search` по строкам из лога компилятора. |
+| `javascriptcoregtk-4.1` / `No package 'javascriptcoregtk-4.1' found` | На **ALT p11**: `apt-get install -y libwebkit2gtk4.1-devel` (см. блок выше). Команды с именами вроде `libwebkit2gtk-4.1-dev` относятся к **Debian/Ubuntu**, в ALT их нет. |
+| `failed to run linuxdeploy` / `Permission denied: ... mtr-packet` | В актуальном репозитории AppImage отключён в `tauri.conf.json`. Если собираете старый клон — обновите репозиторий или временно уберите AppImage из `bundle.targets`. Либо под root ослабьте права на проблемный файл (менее желательно). |
+| `cp: ... dist/cloudfusion-daemon: Нет такого файла` | Сначала выполните **шаг 3** (`./scripts/build-linux-daemon.sh`), проверьте `test -f dist/cloudfusion-daemon`. |
+| `Файл ... cloudfusion.spec не похож на файл спецификации` | Часто **CRLF** (клон с Windows). Из **РЕПО**: `file packaging/rpm/cloudfusion.spec`, затем `dos2unix packaging/rpm/cloudfusion.spec` (пакет `dos2unix` / аналог). Первые строки должны быть обычным текстом: `head -n 5 packaging/rpm/cloudfusion.spec`. |
 | `rpmbuild: command not found` | Установите пакет **`rpm-build`** (или как он называется у вас). |
 
 В [`cloudfusion.spec`](cloudfusion.spec) строка **`Requires:`** для FUSE при необходимости замените на имя пакета вашего дистрибутива.
