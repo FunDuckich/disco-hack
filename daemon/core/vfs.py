@@ -60,6 +60,13 @@ def _remote_child(parent_remote: str | None, name: str) -> str:
     return f"{p}/{name}"
 
 
+def _yandex_remote_basename_from_dolphin_name(name_s: str) -> str:
+    """Dolphin/KDE при сохранении создаёт файл с суффиксом .part; в облаке нужен финальный путь без .part."""
+    if len(name_s) > 5 and name_s.endswith(".part"):
+        return name_s[:-5]
+    return name_s
+
+
 def _yandex_revision(meta) -> str:
     r = getattr(meta, "revision", None)
     return str(r) if r is not None else ""
@@ -85,11 +92,74 @@ class CloudFusionVFS(pyfuse3.Operations):
         self._next_write_fh = _WRITE_FH_BASE
         self._write_handles: dict[int, dict] = {}
         self._stub_fetch_locks: dict[int, asyncio.Lock] = {}
+        # Загрузка после close() не должна блокировать FUSE: фон + await при rename/unlink/open(WR).
+        self._pending_finalize_uploads: dict[int, asyncio.Task] = {}
 
     def _stub_lock(self, db_id: int) -> asyncio.Lock:
         if db_id not in self._stub_fetch_locks:
             self._stub_fetch_locks[db_id] = asyncio.Lock()
         return self._stub_fetch_locks[db_id]
+
+    async def _await_pending_finalize(self, db_id: int) -> None:
+        t = self._pending_finalize_uploads.get(db_id)
+        if not t:
+            return
+        await t
+        exc = t.exception()
+        if exc is not None:
+            log.warning(
+                "FUSE: фоновая загрузка db_id=%s завершилась с ошибкой: %s",
+                db_id,
+                exc,
+            )
+            raise pyfuse3.FUSEError(errno.EIO) from exc
+
+    async def _finalize_upload_worker(self, h: dict) -> None:
+        db_id = h["db_id"]
+        temp = h["temp"]
+        try:
+            sz = await asyncio.to_thread(_sync_file_size, temp)
+            yc = self._yandex_client()
+            upload_timeout = _UPLOAD_TIMEOUT_EMPTY if sz == 0 else _UPLOAD_TIMEOUT
+            await asyncio.wait_for(
+                yc.upload_local_file(temp, h["remote"]),
+                timeout=upload_timeout,
+            )
+            meta = await asyncio.wait_for(
+                yc.get_meta(h["remote"]),
+                timeout=_GET_META_TIMEOUT,
+            )
+            rev = _yandex_revision(meta)
+            cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
+            await asyncio.to_thread(os.makedirs, cache_dir, 0o755, True)
+            row = await self.db_manager.get_file_by_id(db_id)
+            base_name = row["name"] if row else os.path.basename(h["remote"])
+            final = os.path.join(cache_dir, f"{db_id}_{base_name}")
+            await asyncio.to_thread(_sync_release_finalize, temp, final)
+            await self.db_manager.update_yandex_entry_meta(
+                db_id,
+                size=sz,
+                etag=rev,
+                status="cached",
+                local_path=final,
+            )
+        except Exception:
+            log.exception("FUSE async finalize upload db_id=%s", db_id)
+            if h.get("created"):
+                try:
+                    await self.db_manager.delete_file_row_yandex(db_id)
+                except Exception:
+                    log.exception("FUSE rollback db")
+            if await asyncio.to_thread(os.path.isfile, temp):
+                try:
+                    await asyncio.to_thread(os.unlink, temp)
+                except OSError:
+                    pass
+            raise
+        finally:
+            cur = asyncio.current_task()
+            if self._pending_finalize_uploads.get(db_id) is cur:
+                self._pending_finalize_uploads.pop(db_id, None)
 
     async def _ensure_file_cached(self, db_id: int) -> None:
         async with self._stub_lock(db_id):
@@ -158,10 +228,15 @@ class CloudFusionVFS(pyfuse3.Operations):
         else:
             entry.st_mode = stat.S_IFREG | 0o644
             lp = row.get("local_path")
-            if lp and os.path.isfile(lp):
-                entry.st_size = os.path.getsize(lp)
-            else:
-                entry.st_size = row["size"]
+
+            def _attr_size_for_file(local_p, row_size):
+                if local_p and os.path.isfile(local_p):
+                    return os.path.getsize(local_p)
+                return row_size
+
+            entry.st_size = await asyncio.to_thread(
+                _attr_size_for_file, lp, row["size"]
+            )
 
         return entry
 
@@ -260,6 +335,10 @@ class CloudFusionVFS(pyfuse3.Operations):
         if accmode in (os.O_WRONLY, os.O_RDWR):
             if row.get("cloud_type") != "yandex":
                 raise pyfuse3.FUSEError(errno.EROFS)
+            await self._await_pending_finalize(db_id)
+            row = await self.db_manager.get_file_by_id(db_id)
+            if not row:
+                raise pyfuse3.FUSEError(errno.ENOENT)
             upload_dir = os.path.expanduser("~/.cache/cloud-fusion/uploads/")
             os.makedirs(upload_dir, exist_ok=True)
             temp = os.path.join(upload_dir, f"w-{db_id}-{os.getpid()}.part")
@@ -305,7 +384,9 @@ class CloudFusionVFS(pyfuse3.Operations):
         if await self.db_manager.lookup_file(parent_id, name_s):
             raise pyfuse3.FUSEError(errno.EEXIST)
 
-        remote = _remote_child(rp_parent, name_s)
+        remote = _remote_child(
+            rp_parent, _yandex_remote_basename_from_dolphin_name(name_s)
+        )
         upload_dir = os.path.expanduser("~/.cache/cloud-fusion/uploads/")
         os.makedirs(upload_dir, exist_ok=True)
 
@@ -386,30 +467,23 @@ class CloudFusionVFS(pyfuse3.Operations):
         temp = h["temp"]
         try:
             if h.get("dirty") or h.get("created"):
-                sz = await asyncio.to_thread(_sync_file_size, temp)
-                yc = self._yandex_client()
-                upload_timeout = _UPLOAD_TIMEOUT_EMPTY if sz == 0 else _UPLOAD_TIMEOUT
-                await asyncio.wait_for(
-                    yc.upload_local_file(temp, h["remote"]),
-                    timeout=upload_timeout,
+                prev = self._pending_finalize_uploads.get(h["db_id"])
+                if prev is not None and not prev.done():
+                    log.warning(
+                        "FUSE release: предыдущая загрузка db_id=%s ещё идёт — ждём",
+                        h["db_id"],
+                    )
+                    await prev
+                    exc = prev.exception()
+                    if exc is not None:
+                        raise exc
+                self._pending_finalize_uploads[h["db_id"]] = asyncio.create_task(
+                    self._finalize_upload_worker(h)
                 )
-                meta = await asyncio.wait_for(
-                    yc.get_meta(h["remote"]),
-                    timeout=_GET_META_TIMEOUT,
-                )
-                rev = _yandex_revision(meta)
-                cache_dir = os.path.expanduser("~/.cache/cloud-fusion/")
-                await asyncio.to_thread(os.makedirs, cache_dir, 0o755, True)
-                row = await self.db_manager.get_file_by_id(h["db_id"])
-                base_name = row["name"] if row else os.path.basename(h["remote"])
-                final = os.path.join(cache_dir, f"{h['db_id']}_{base_name}")
-                await asyncio.to_thread(_sync_release_finalize, temp, final)
-                await self.db_manager.update_yandex_entry_meta(
+                log.info(
+                    "FUSE release: загрузка в фоне на %s (db_id=%s)",
+                    h["remote"],
                     h["db_id"],
-                    size=sz,
-                    etag=rev,
-                    status="cached",
-                    local_path=final,
                 )
             elif await asyncio.to_thread(os.path.isfile, temp):
                 await asyncio.to_thread(os.unlink, temp)
@@ -511,6 +585,10 @@ class CloudFusionVFS(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EISDIR)
         if row.get("cloud_type") != "yandex":
             raise pyfuse3.FUSEError(errno.EROFS)
+        await self._await_pending_finalize(fid)
+        row = await self.db_manager.get_file_by_id(fid)
+        if not row:
+            raise pyfuse3.FUSEError(errno.ENOENT)
         try:
             await asyncio.wait_for(
                 self._yandex_client().remove_remote(row["remote_path"]),
@@ -580,31 +658,40 @@ class CloudFusionVFS(pyfuse3.Operations):
         else:
             raise pyfuse3.FUSEError(errno.EXDEV)
 
-        new_remote = _remote_child(rp_new_parent, name_new_s)
-
         old_row = await self.db_manager.get_file_by_id(old_id)
         old_remote = old_row["remote_path"]
         if old_row.get("cloud_type") != "yandex":
             raise pyfuse3.FUSEError(errno.EXDEV)
 
+        await self._await_pending_finalize(old_id)
+
+        new_remote = _remote_child(
+            rp_new_parent,
+            _yandex_remote_basename_from_dolphin_name(name_new_s),
+        )
+
         if exist_new:
+            await self._await_pending_finalize(exist_new)
             ex_row = await self.db_manager.get_file_by_id(exist_new)
             if ex_row and ex_row.get("cloud_type") != "yandex":
                 raise pyfuse3.FUSEError(errno.EXDEV)
             await self.db_manager.delete_subtree(exist_new)
 
-        try:
-            await asyncio.wait_for(
-                self._yandex_client().move_remote(
-                    old_remote, new_remote, overwrite=True
-                ),
-                timeout=_MOVE_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            log.error(
-                "FUSE rename: move_remote timeout %s -> %s", old_remote, new_remote
-            )
-            raise pyfuse3.FUSEError(errno.ETIMEDOUT) from None
+        if old_remote != new_remote:
+            try:
+                await asyncio.wait_for(
+                    self._yandex_client().move_remote(
+                        old_remote, new_remote, overwrite=True
+                    ),
+                    timeout=_MOVE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                log.error(
+                    "FUSE rename: move_remote timeout %s -> %s",
+                    old_remote,
+                    new_remote,
+                )
+                raise pyfuse3.FUSEError(errno.ETIMEDOUT) from None
 
         if old_row["is_dir"]:
             await self.db_manager.update_yandex_entry_meta(
