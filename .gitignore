@@ -226,6 +226,7 @@ daemon/__pycache__/
 *.sqlite
 /daemon/cache/
 !/daemon/cache/.gitkeep
+CLAUDE.md
 
 # --- OS & Editors ---
 .DS_Store

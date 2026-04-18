@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  /* Твоя новая ретро-палитра */
+  --color-retro-yellow: #FFC567;
+  --color-retro-pink: #FB7DA8;
+  --color-retro-red: #FD5A46;
+  --color-retro-purple: #552CB7;
+  --color-retro-green: #00995E;
+  --color-retro-blue: #058CD7;
+  --color-retro-bg: #F4F2ED; 
+  --color-retro-dark: #1A1A1A;
+  
+  /* Жесткая ретро-тень */
+  --shadow-retro: 4px 4px 0px 0px rgba(26, 26, 26, 1);
+  --shadow-retro-hover: 2px 2px 0px 0px rgba(26, 26, 26, 1);
+}
+
+@layer base {
+  body {
+    @apply bg-retro-bg text-retro-dark;
+  }
+}
