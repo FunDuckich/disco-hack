@@ -17,8 +17,22 @@ logging.basicConfig(level=logging.INFO)
 
 
 async def start_cloud_fusion():
+    if os.geteuid() == 0:
+        msg = (
+            "монтирование FUSE от root недоступно: обычные процессы (Dolphin) не увидят файловую систему. "
+            "запустите без sudo"
+        )
+        if os.environ.get("SUDO_UID"):
+            msg += " (или залогиньтесь под нужным пользователем и не используйте sudo для mount)"
+        logging.error(msg)
+        raise SystemExit(1)
+
     mountpoint = os.path.expanduser("~/CloudFusion")
     os.makedirs(mountpoint, exist_ok=True)
+    try:
+        os.chmod(mountpoint, 0o755)
+    except OSError as e:
+        logging.warning("не удалось chmod 755 на %s: %s", mountpoint, e)
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     db_path = os.path.abspath(os.path.join(current_dir, "..", "database", "cloudfusion.db"))
