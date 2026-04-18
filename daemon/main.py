@@ -139,12 +139,10 @@ async def start_nextcloud_auth(data: NextcloudInit):
         raise HTTPException(status_code=400, detail=f"Не удалось связаться с сервером: {e}")
 
 
-# Фоновая функция, которая каждую секунду дергает сервер
 async def poll_nextcloud_token(host: str, poll_endpoint: str, poll_token: str):
     print("Начинаю ожидание авторизации в браузере...")
 
     async with httpx.AsyncClient() as client:
-        # Пингуем сервер 60 раз (1 минуту), пока юзер логинится
         for _ in range(60):
             response = await client.post(poll_endpoint, data={"token": poll_token})
 
@@ -155,7 +153,6 @@ async def poll_nextcloud_token(host: str, poll_endpoint: str, poll_token: str):
 
                 print(f"🔥 УСПЕХ! Получен пароль для {login}")
 
-                # Сохраняем в нашу базу!
                 await db.set_config("nc_host", host)
                 await db.set_config("nc_login", login)
                 await db.set_config("nc_password", app_password)
@@ -163,7 +160,6 @@ async def poll_nextcloud_token(host: str, poll_endpoint: str, poll_token: str):
                 return
 
             elif response.status_code == 404:
-                # 404 означает "Юзер еще не нажал кнопку разрешить". Просто ждем.
                 await asyncio.sleep(1)
             else:
                 print("Ошибка при polling:", response.text)

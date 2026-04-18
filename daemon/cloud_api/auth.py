@@ -17,7 +17,6 @@ class YandexAuthenticator:
     def get_login_url(cls) -> str:
         """Отдает ссылку, которую нужно открыть в браузере пользователя"""
         client = cls.get_auth_client()
-        # Генерируем ссылку для авторизации
         return client.get_code_url(display="popup")
 
     @classmethod

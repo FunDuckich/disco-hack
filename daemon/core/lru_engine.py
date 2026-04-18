@@ -31,7 +31,6 @@ async def run_lru_cleanup(db_path, cache_dir, max_size_gb=5):
             for file in rows:
                 if freed >= diff: break
 
-                # Физическое удаление файла
                 if file['local_path'] and os.path.exists(file['local_path']):
                     try:
                         os.remove(file['local_path'])
