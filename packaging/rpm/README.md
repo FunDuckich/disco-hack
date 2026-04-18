@@ -144,7 +144,15 @@ test -f /usr/share/kio/servicemenus/cloudfusion-link.desktop && echo kio_ok
 
 ### Запуск и OAuth
 
-В **том же сеансе**, откуда запускаете окно, должны быть заданы **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (см. [`daemon/.env.example`](../../daemon/.env.example)). Затем:
+Демон читает переменные из окружения процесса **`cloudfusion`** и из файлов (по приоритету): **`~/.config/cloudfusion/.env`**, **`/etc/cloudfusion.env`**, при PyInstaller — **`.env` рядом с бинарём демона`**.
+
+Для реального OAuth задайте **`YANDEX_CLIENT_ID`** и **`YANDEX_CLIENT_SECRET`** (шаблон — [`daemon/.env.example`](../../daemon/.env.example)). Для проверки интерфейса без ключей: **`CLOUDFUSION_MOCK_YANDEX=1`** в **`~/.config/cloudfusion/.env`** или в экспорте перед запуском.
+
+FUSE-монтирование: **`ENABLE_FUSE=true`** (и **`libfuse3`** в системе); иначе диск в файловом менеджере не появится.
+
+Если демон долго стартует, увеличьте ожидание GUI: **`CLOUDFUSION_DAEMON_READY_SEC=120`** (секунды, по умолчанию 90).
+
+Запуск:
 
 ```bash
 /usr/bin/cloudfusion

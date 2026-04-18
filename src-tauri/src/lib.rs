@@ -61,12 +61,17 @@ fn forward_daemon_env(cmd: &mut Command) {
   for (k, v) in std::env::vars() {
     if k.starts_with("YANDEX_")
       || k.starts_with("NC_")
+      || k.starts_with("CLOUDFUSION_")
+        && k != "CLOUDFUSION_DAEMON_BIN"
+        && k != "CLOUDFUSION_DAEMON_READY_SEC"
       || k == "ENABLE_FUSE"
       || k == "MOUNTPOINT"
       || k == "CACHE_DIR"
       || k == "DB_PATH"
       || k == "MAX_CACHE_GB"
       || k == "YANDEX_REDIRECT_URI"
+      || k == "ALLOWED_ORIGINS"
+      || k == "CORS_ORIGIN_REGEX"
       || k == "XDG_DATA_HOME"
       || k == "XDG_CONFIG_HOME"
       || k == "XDG_CACHE_HOME"
@@ -102,12 +107,18 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> std::io::Result<()> {
 
   let mut cmd = Command::new(&bin);
   cmd.stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    .stdout(Stdio::inherit())
+    .stderr(Stdio::inherit());
   forward_daemon_env(&mut cmd);
   let mut child = cmd.spawn()?;
 
-  if !wait_for_daemon_ready(Duration::from_secs(45)) {
+  let ready_secs: u64 = std::env::var("CLOUDFUSION_DAEMON_READY_SEC")
+    .ok()
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(90)
+    .clamp(1, 600);
+
+  if !wait_for_daemon_ready(Duration::from_secs(ready_secs)) {
     let _ = child.kill();
     let _ = child.wait();
     return Err(std::io::Error::new(

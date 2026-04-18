@@ -1,9 +1,27 @@
 import os
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-load_dotenv()
+
+def load_dotenv_layers() -> None:
+    """Подхватываем .env из cwd, рядом с бинарём (PyInstaller) и из ~/.config (установленный RPM)."""
+    load_dotenv()
+    if getattr(sys, "frozen", False):
+        beside = Path(sys.executable).resolve().parent / ".env"
+        if beside.is_file():
+            load_dotenv(beside, override=True)
+    cfg = Path.home() / ".config" / "cloudfusion" / ".env"
+    if cfg.is_file():
+        load_dotenv(cfg, override=True)
+    etc = Path("/etc/cloudfusion.env")
+    if etc.is_file():
+        load_dotenv(etc, override=True)
+
+
+load_dotenv_layers()
 
 
 def default_db_path() -> str:
@@ -32,6 +50,18 @@ def _env_bool(key: str, default: bool = False) -> bool:
 
 
 def _load() -> Settings:
+    mock = _env_bool("CLOUDFUSION_MOCK_YANDEX", False)
+    yid = os.getenv("YANDEX_CLIENT_ID")
+    ysec = os.getenv("YANDEX_CLIENT_SECRET")
+    if mock:
+        yid = yid or "mock-client-id"
+        ysec = ysec or "mock-client-secret"
+    elif not yid or not ysec:
+        raise RuntimeError(
+            "Missing YANDEX_CLIENT_ID / YANDEX_CLIENT_SECRET. "
+            "Put them in ~/.config/cloudfusion/.env (see daemon/.env.example) "
+            "or export before starting cloudfusion; for UI-only dev use CLOUDFUSION_MOCK_YANDEX=1."
+        )
     try:
         return Settings(
             cache_dir=os.getenv("CACHE_DIR", "~/.cache/cloud-fusion/"),
@@ -39,15 +69,12 @@ def _load() -> Settings:
             mountpoint=os.getenv("MOUNTPOINT", "~/CloudFusion"),
             db_path=os.getenv("DB_PATH") or default_db_path(),
             enable_fuse=_env_bool("ENABLE_FUSE", False),
-            yandex_client_id=os.environ["YANDEX_CLIENT_ID"],
-            yandex_client_secret=os.environ["YANDEX_CLIENT_SECRET"],
+            yandex_client_id=yid,
+            yandex_client_secret=ysec,
             yandex_redirect_uri=os.getenv("YANDEX_REDIRECT_URI", "http://localhost:8000/callback"),
         )
-    except KeyError as e:
-        raise RuntimeError(
-            f"Missing required environment variable: {e.args[0]}. "
-            f"See daemon/.env.example for the full list."
-        ) from e
+    except Exception as e:
+        raise RuntimeError(f"Invalid configuration: {e}") from e
 
 
 settings = _load()
