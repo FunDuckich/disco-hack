@@ -193,9 +193,18 @@ class DBManager:
         )
         await db.commit()
 
+    async def _fts_delete_row(self, db, rowid: int) -> None:
+        await db.execute(
+            "INSERT INTO files_fts(files_fts, rowid, name) VALUES('delete', ?, NULL)",
+            (rowid,),
+        )
+
+    async def _fts_insert_row(self, db, rowid: int, name: str) -> None:
+        await db.execute("INSERT INTO files_fts(rowid, name) VALUES (?, ?)", (rowid, name))
+
     async def delete_subtree(self, root_id: int) -> None:
         db = await self.get_db()
-        await db.execute(
+        cur = await db.execute(
             """
             WITH RECURSIVE doomed AS (
                 SELECT id FROM files WHERE id = ?
@@ -203,10 +212,134 @@ class DBManager:
                 SELECT f.id FROM files AS f
                 INNER JOIN doomed AS d ON f.parent_id = d.id
             )
-            DELETE FROM files WHERE id IN (SELECT id FROM doomed)
+            SELECT id FROM doomed
             """,
             (root_id,),
         )
+        ids = [r[0] for r in await cur.fetchall()]
+        for rid in ids:
+            await self._fts_delete_row(db, rid)
+        if ids:
+            q = "DELETE FROM files WHERE id IN (%s)" % ",".join("?" * len(ids))
+            await db.execute(q, ids)
+        await db.commit()
+
+    async def insert_yandex_child(
+        self,
+        *,
+        parent_id: int | None,
+        name: str,
+        is_dir: bool,
+        remote_path: str,
+        size: int = 0,
+        status: str = "stub",
+        etag: str = "",
+        local_path: str | None = None,
+    ) -> int:
+        db = await self.get_db()
+        cur = await db.execute(
+            """
+            INSERT INTO files (parent_id, name, is_dir, size, cloud_type, remote_path, etag, status, local_path)
+            VALUES (?, ?, ?, ?, 'yandex', ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                parent_id,
+                name,
+                1 if is_dir else 0,
+                size,
+                remote_path,
+                etag,
+                status,
+                local_path,
+            ),
+        )
+        row = await cur.fetchone()
+        rid = int(row[0])
+        await self._fts_insert_row(db, rid, name)
+        await db.commit()
+        return rid
+
+    async def delete_file_row_yandex(self, file_id: int) -> None:
+        db = await self.get_db()
+        await self._fts_delete_row(db, file_id)
+        await db.execute("DELETE FROM files WHERE id = ?", (file_id,))
+        await db.commit()
+
+    _META_UNSET = object()
+
+    async def update_yandex_entry_meta(
+        self,
+        file_id: int,
+        *,
+        name=_META_UNSET,
+        parent_id=_META_UNSET,
+        remote_path=_META_UNSET,
+        size=_META_UNSET,
+        etag=_META_UNSET,
+        status=_META_UNSET,
+        local_path=_META_UNSET,
+    ) -> None:
+        db = await self.get_db()
+        parts = []
+        vals: list = []
+        if name is not self._META_UNSET:
+            parts.append("name = ?")
+            vals.append(name)
+        if parent_id is not self._META_UNSET:
+            parts.append("parent_id = ?")
+            vals.append(parent_id)
+        if remote_path is not self._META_UNSET:
+            parts.append("remote_path = ?")
+            vals.append(remote_path)
+        if size is not self._META_UNSET:
+            parts.append("size = ?")
+            vals.append(size)
+        if etag is not self._META_UNSET:
+            parts.append("etag = ?")
+            vals.append(etag)
+        if status is not self._META_UNSET:
+            parts.append("status = ?")
+            vals.append(status)
+        if local_path is not self._META_UNSET:
+            parts.append("local_path = ?")
+            vals.append(local_path)
+        if not parts:
+            return
+        vals.append(file_id)
+        await db.execute(
+            f"UPDATE files SET {', '.join(parts)} WHERE id = ?",
+            vals,
+        )
+        if name is not self._META_UNSET:
+            await self._fts_delete_row(db, file_id)
+            await self._fts_insert_row(db, file_id, name)
+        await db.commit()
+
+    async def yandex_update_descendant_remotes_after_dir_move(
+        self, dir_id: int, old_root_remote: str, new_root_remote: str
+    ) -> None:
+        db = await self.get_db()
+        old_p = old_root_remote.rstrip("/")
+        new_p = new_root_remote.rstrip("/")
+        cur = await db.execute(
+            """
+            WITH RECURSIVE sub AS (
+                SELECT id, remote_path FROM files WHERE parent_id = ?
+                UNION ALL
+                SELECT f.id, f.remote_path FROM files f INNER JOIN sub ON f.parent_id = sub.id
+            )
+            SELECT id, remote_path FROM sub
+            """,
+            (dir_id,),
+        )
+        for rid, rp in await cur.fetchall():
+            s = str(rp)
+            if not s.startswith(old_p + "/"):
+                continue
+            suffix = s[len(old_p) :]
+            nr = new_p + suffix
+            await db.execute("UPDATE files SET remote_path = ? WHERE id = ?", (nr, rid))
         await db.commit()
 
     async def update_file_etag(self, file_id: int, etag: str) -> None:
