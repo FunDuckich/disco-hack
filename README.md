@@ -1,4 +1,17 @@
 # Запуск (Linux)
+Запусить терминал в домашней директории. Убедиться, что установлены GIT и python3.
+Скопировать репозиторий:
+```bash
+git clone https://github.com/FunDuckich/disco-hack/
+```
+# Переход в созданную директорию
+```bash
+cd disco-hack
+```
+# Переключение на ветку master
+```bash
+git checkout master
+```
 
 Из **корня репозитория**:
 
